@@ -145,19 +145,26 @@
             :to="`/integrations/${integration.id}`"
             class="card p-4 block hover:border-ink/30 transition-colors no-underline text-ink"
           >
-            <div class="flex items-baseline justify-between gap-4">
-              <div class="font-medium">{{ integration.name }}</div>
-              <div class="flex items-center gap-3 shrink-0 text-xs text-subtle">
-                <span v-for="space in integration.spaces" :key="space">{{ space }}</span>
-                <span
-                  v-if="integration.kuali"
-                  class="font-display uppercase tracking-wider text-[10px] border border-ink/20 px-1.5 py-0.5 text-ink"
-                >
-                  Kuali-managed
-                </span>
-              </div>
+            <div class="font-medium">{{ integration.name }}</div>
+            <div
+              v-if="integration.spaces?.length || integration.kuali"
+              class="flex flex-wrap items-center gap-2 mt-1.5 text-xs text-subtle"
+            >
+              <span
+                v-for="space in integration.spaces"
+                :key="space"
+                class="border border-rule px-1.5 py-0.5"
+              >
+                {{ space }}
+              </span>
+              <span
+                v-if="integration.kuali"
+                class="font-display uppercase tracking-wider text-[10px] border border-ink/20 px-1.5 py-0.5 text-ink"
+              >
+                Kuali-managed
+              </span>
             </div>
-            <div v-if="integration.description" class="text-sm text-muted mt-1">
+            <div v-if="integration.description" class="text-sm text-muted mt-2">
               {{ integration.description }}
             </div>
           </NuxtLink>
