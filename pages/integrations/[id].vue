@@ -12,7 +12,12 @@
       <header class="mb-8">
         <div class="flex items-baseline justify-between gap-6">
           <h1 class="text-3xl">{{ integration.name }}</h1>
-          <div v-if="integration.kuali" class="text-xs text-subtle">Kuali-managed</div>
+          <div
+            v-if="integration.kuali"
+            class="font-display uppercase tracking-wider text-[10px] border border-ink/20 px-1.5 py-0.5 text-ink shrink-0"
+          >
+            Kuali-managed
+          </div>
         </div>
         <p v-if="integration.description" class="text-muted mt-2">
           {{ integration.description }}
@@ -71,7 +76,7 @@
           <li v-for="app in visibleAppsUsing" :key="app.id">
             <NuxtLink
               :to="`/apps/${app.id}`"
-              class="card p-3 block hover:border-accent transition-colors no-underline text-ink flex items-center justify-between"
+              class="card p-3 block hover:border-ink/30 transition-colors no-underline text-ink flex items-center justify-between"
             >
               <span class="font-medium">{{ app.name }}</span>
               <span class="text-xs text-subtle">View details &rarr;</span>

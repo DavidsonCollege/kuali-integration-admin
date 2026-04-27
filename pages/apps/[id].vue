@@ -141,7 +141,7 @@
                         <span class="text-subtle">{{ input.sourceType }}</span>
                       </template>
                     </span>
-                    <span v-if="input.required" class="text-xs text-accent shrink-0">required</span>
+                    <span v-if="input.required" class="text-[10px] uppercase tracking-wider text-subtle shrink-0">required</span>
                   </li>
                 </ul>
               </div>
