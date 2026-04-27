@@ -43,16 +43,16 @@
             <dd>{{ integration.appsUsing?.length || 0 }}</dd>
           </div>
           <div class="stat">
-            <dt>Sharing type</dt>
-            <dd class="text-base">{{ integration.sharedWithOthers?.type || '—' }}</dd>
+            <dt>Sharing</dt>
+            <dd class="text-base">{{ sharingTypeLabel }}</dd>
           </div>
           <div class="stat">
             <dt>Type</dt>
-            <dd class="text-base">{{ integrationType || '—' }}</dd>
+            <dd class="text-base">{{ typeLabel || '—' }}</dd>
           </div>
           <div class="stat">
             <dt>Home space</dt>
-            <dd class="font-mono text-xs leading-tight break-all">{{ homeSpaceId || '—' }}</dd>
+            <dd class="text-base">{{ homeSpaceName || '—' }}</dd>
           </div>
         </dl>
       </header>
@@ -134,11 +134,23 @@
 </template>
 
 <script setup>
-import { getIntegration } from '~/graphql/queries';
+import { getIntegration, getSpaces } from '~/graphql/queries';
 
 const route = useRoute();
 const { request } = useGraphQL();
 const { hasApiKey } = useApiKey();
+
+// Sharing-type values seen on the Build API. SPECIFIC means a curated list of
+// apps; ALL means open to every app in the tenant. Anything else (no sharing
+// block at all, or NONE/DISABLED if the API ever surfaces those) reads as
+// disabled. Unknown future enum values fall through to their raw string so the
+// UI doesn't lie.
+const SHARING_TYPE_LABELS = {
+  SPECIFIC: 'Limited',
+  ALL: 'Public',
+  NONE: 'Disabled',
+  DISABLED: 'Disabled',
+};
 
 if (!hasApiKey.value) {
   // No key — bounce home so the user can connect.
@@ -158,9 +170,30 @@ const sharedSort = ref('name-asc');
 const appsSearchEl = ref(null);
 useSearchHotkey(appsSearchEl);
 
-// `data` is a JSON blob — pull a couple of useful fields out for the header.
-const integrationType = computed(() => integration.value?.data?.__type);
-const homeSpaceId = computed(() => integration.value?.data?.__spaceId);
+// `data` is a JSON blob. `__type` is a `{id, label}` object; surface just the
+// label. `__spaceId` is a raw id; resolve it to the human space name using
+// the index page's cached spaces list (and backfill on a deep-link load).
+const cachedSpaces = useState('integrationsSpaces', () => []);
+
+const typeLabel = computed(() => {
+  const t = integration.value?.data?.__type;
+  if (!t) return null;
+  if (typeof t === 'string') return t;
+  return t.label || t.id || null;
+});
+
+const homeSpaceName = computed(() => {
+  const id = integration.value?.data?.__spaceId;
+  if (!id) return null;
+  const match = cachedSpaces.value.find((s) => s.id === id);
+  return match?.name || id;
+});
+
+const sharingTypeLabel = computed(() => {
+  const sharing = integration.value?.sharedWithOthers;
+  if (!sharing || !sharing.type) return 'Disabled';
+  return SHARING_TYPE_LABELS[sharing.type] || sharing.type;
+});
 
 const filterAndSort = (list, search, sort) => {
   const q = (search || '').trim().toLowerCase();
@@ -183,7 +216,17 @@ const load = async () => {
   loading.value = true;
   error.value = null;
   try {
-    const result = await request(getIntegration, { id: route.params.id });
+    // Fan out: integration is the headline payload; spaces is a backfill so
+    // the home-space cell can show a name on a deep-link load. The spaces
+    // call is fire-and-forget — if it fails, homeSpaceName falls back to id.
+    const [result] = await Promise.all([
+      request(getIntegration, { id: route.params.id }),
+      cachedSpaces.value.length === 0
+        ? request(getSpaces).then((res) => {
+            cachedSpaces.value = res?.spaces || [];
+          }).catch(() => {})
+        : Promise.resolve(),
+    ]);
     integration.value = result.integration;
   } catch (e) {
     error.value = e.message || 'Failed to load integration.';
