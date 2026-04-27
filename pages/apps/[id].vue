@@ -59,39 +59,66 @@
             No integration references found in this app's form or workflow.
           </div>
 
-          <div v-else class="space-y-6">
-            <article
-              v-for="integration in introspection.integrations"
-              :key="integration.formKey"
-              class="card p-5"
-            >
+          <!-- Two-column pivot: list on the left, selected integration on the
+               right. Keeps the demo focused on one integration at a time. -->
+          <div v-else class="grid md:grid-cols-[18rem_1fr] gap-6">
+            <!-- Left: integration list -->
+            <aside>
+              <ul class="card divide-y divide-rule">
+                <li v-for="integration in introspection.integrations" :key="integration.formKey">
+                  <button
+                    type="button"
+                    class="w-full text-left px-3 py-2.5 transition-colors block"
+                    :class="selectedKey === integration.formKey
+                      ? 'bg-accent/5 border-l-2 border-accent -ml-px'
+                      : 'border-l-2 border-transparent hover:bg-ink/[0.02]'"
+                    @click="selectedKey = integration.formKey"
+                  >
+                    <div class="text-sm font-medium truncate">
+                      {{ integration.integrationLabel || integration.gadgetLabel || integration.integrationId }}
+                    </div>
+                    <div class="text-xs text-subtle mt-0.5">
+                      {{ integration.outputs.length }} output{{ integration.outputs.length === 1 ? '' : 's' }}
+                      · {{ totalConsumers(integration) }} consumer{{ totalConsumers(integration) === 1 ? '' : 's' }}
+                    </div>
+                  </button>
+                </li>
+              </ul>
+              <p class="mt-3 text-xs text-subtle italic">
+                {{ introspection.totals.form }} form ref{{ introspection.totals.form === 1 ? '' : 's' }}
+                · {{ introspection.totals.workflow }} workflow ref{{ introspection.totals.workflow === 1 ? '' : 's' }}
+              </p>
+            </aside>
+
+            <!-- Right: selected integration detail -->
+            <article v-if="selected" class="card p-5">
               <header class="flex items-baseline justify-between gap-3 flex-wrap">
                 <div>
                   <h3 class="text-lg">
                     <NuxtLink
-                      :to="`/integrations/${integration.integrationId}`"
+                      :to="`/integrations/${selected.integrationId}`"
                       class="text-accent hover:underline"
                     >
-                      {{ integration.integrationLabel || integration.gadgetLabel || integration.integrationId }}
+                      {{ selected.integrationLabel || selected.gadgetLabel || selected.integrationId }}
                     </NuxtLink>
                   </h3>
                   <p class="text-xs text-subtle mt-1">
-                    {{ integration.gadgetType }} · gadget "{{ integration.gadgetLabel || '(unnamed)' }}"
-                    · <code class="font-mono">{{ integration.formKey }}</code>
+                    {{ selected.gadgetType }} · gadget "{{ selected.gadgetLabel || '(unnamed)' }}"
+                    · <code class="font-mono">{{ selected.formKey }}</code>
                   </p>
                 </div>
                 <div class="text-xs text-subtle text-right">
-                  {{ integration.outputs.length }} output{{ integration.outputs.length === 1 ? '' : 's' }}
-                  · {{ totalConsumers(integration) }} consumer{{ totalConsumers(integration) === 1 ? '' : 's' }}
+                  {{ selected.outputs.length }} output{{ selected.outputs.length === 1 ? '' : 's' }}
+                  · {{ totalConsumers(selected) }} consumer{{ totalConsumers(selected) === 1 ? '' : 's' }}
                 </div>
               </header>
 
               <!-- Inputs: what feeds the integration. -->
-              <div v-if="integration.inputs.length" class="mt-5">
+              <div v-if="selected.inputs.length" class="mt-5">
                 <h4 class="text-xs uppercase tracking-wider text-subtle mb-2">Inputs</h4>
                 <ul class="text-sm divide-y divide-rule border border-rule">
                   <li
-                    v-for="(input, i) in integration.inputs"
+                    v-for="(input, i) in selected.inputs"
                     :key="i"
                     class="px-3 py-2 flex items-baseline gap-3"
                   >
@@ -124,12 +151,12 @@
                 <h4 class="text-xs uppercase tracking-wider text-subtle mb-2">
                   Outputs &amp; where they're used
                 </h4>
-                <div v-if="!integration.outputs.length" class="text-sm text-muted">
+                <div v-if="!selected.outputs.length" class="text-sm text-muted">
                   This integration declares no output fields.
                 </div>
                 <ul v-else class="space-y-3">
                   <li
-                    v-for="output in integration.outputs"
+                    v-for="output in selected.outputs"
                     :key="output.path"
                     class="border-l-2 pl-3"
                     :class="output.consumers.length === 0 ? 'border-rule' : 'border-ink/40'"
@@ -180,11 +207,6 @@
               </div>
             </article>
           </div>
-
-          <p class="mt-3 text-xs text-subtle italic">
-            {{ introspection.totals.form }} form-side consumer{{ introspection.totals.form === 1 ? '' : 's' }}
-            · {{ introspection.totals.workflow }} workflow-side reference{{ introspection.totals.workflow === 1 ? '' : 's' }}
-          </p>
         </div>
       </section>
     </div>
@@ -210,6 +232,11 @@ const error = ref(null);
 const introspecting = ref(false);
 const introspectionRun = ref(false);
 const introspection = ref({ integrations: [], gadgetIndex: { list: [], byFormKey: new Map() }, totals: { form: 0, workflow: 0 } });
+const selectedKey = ref(null);
+
+const selected = computed(() =>
+  introspection.value.integrations.find((i) => i.formKey === selectedKey.value) || null
+);
 
 const totalConsumers = (integration) =>
   integration.outputs.reduce((acc, o) => acc + o.consumers.length, 0);
@@ -245,6 +272,8 @@ const onIntrospect = async () => {
   try {
     introspection.value = introspect(app.value);
     introspectionRun.value = true;
+    // Auto-select the first integration so the right pane isn't blank.
+    selectedKey.value = introspection.value.integrations[0]?.formKey ?? null;
   } finally {
     introspecting.value = false;
   }
