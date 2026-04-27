@@ -23,22 +23,22 @@
           {{ integration.description }}
         </p>
 
-        <dl class="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6 text-sm">
-          <div>
-            <dt class="text-subtle">Sharing type</dt>
-            <dd>{{ integration.sharedWithOthers?.type || '—' }}</dd>
-          </div>
-          <div>
-            <dt class="text-subtle">Type</dt>
-            <dd>{{ integrationType || '—' }}</dd>
-          </div>
-          <div>
-            <dt class="text-subtle">Home space</dt>
-            <dd class="font-mono text-xs">{{ homeSpaceId || '—' }}</dd>
-          </div>
-          <div>
-            <dt class="text-subtle">Apps using it</dt>
+        <dl class="grid grid-cols-2 md:grid-cols-4 gap-6 mt-8 pt-6 border-t border-rule">
+          <div class="stat">
+            <dt>Apps using it</dt>
             <dd>{{ integration.appsUsing?.length || 0 }}</dd>
+          </div>
+          <div class="stat">
+            <dt>Sharing type</dt>
+            <dd class="text-base">{{ integration.sharedWithOthers?.type || '—' }}</dd>
+          </div>
+          <div class="stat">
+            <dt>Type</dt>
+            <dd class="text-base">{{ integrationType || '—' }}</dd>
+          </div>
+          <div class="stat">
+            <dt>Home space</dt>
+            <dd class="font-mono text-xs leading-tight break-all">{{ homeSpaceId || '—' }}</dd>
           </div>
         </dl>
       </header>

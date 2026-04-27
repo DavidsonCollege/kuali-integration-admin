@@ -12,29 +12,31 @@
       <header class="mb-8">
         <h1 class="text-3xl">{{ app.name }}</h1>
 
-        <dl class="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6 text-sm">
-          <div>
-            <dt class="text-subtle">Published</dt>
-            <dd>{{ app.dataset?.isPublished ? 'Yes' : 'No' }}</dd>
-          </div>
-          <div>
-            <dt class="text-subtle">Submissions</dt>
+        <dl class="grid grid-cols-2 md:grid-cols-4 gap-6 mt-8 pt-6 border-t border-rule">
+          <div class="stat">
+            <dt>Submissions</dt>
             <dd>{{ submissionCount }}</dd>
           </div>
-          <div>
-            <dt class="text-subtle">Last submission</dt>
-            <dd>{{ lastSubmittedAt || '—' }}</dd>
+          <div class="stat">
+            <dt>Published</dt>
+            <dd class="text-base">{{ app.dataset?.isPublished ? 'Yes' : 'No' }}</dd>
           </div>
-          <div>
-            <dt class="text-subtle">Last edited</dt>
-            <dd>{{ formatDate(app.updatedAt) || '—' }}</dd>
+          <div class="stat">
+            <dt>Last submission</dt>
+            <dd class="text-base">{{ lastSubmittedAt || '—' }}</dd>
           </div>
-          <div class="col-span-2">
-            <dt class="text-subtle">Created by</dt>
+          <div class="stat">
+            <dt>Last edited</dt>
+            <dd class="text-base">{{ formatDate(app.updatedAt) || '—' }}</dd>
+          </div>
+        </dl>
+        <dl class="grid grid-cols-2 gap-6 mt-6 text-sm">
+          <div>
+            <dt class="text-subtle text-xs">Created by</dt>
             <dd>{{ app.createdBy?.displayName || app.updatedBy?.displayName || 'Unknown' }}</dd>
           </div>
-          <div class="col-span-2">
-            <dt class="text-subtle">Last edited by</dt>
+          <div>
+            <dt class="text-subtle text-xs">Last edited by</dt>
             <dd>{{ app.updatedBy?.displayName || '—' }}</dd>
           </div>
         </dl>

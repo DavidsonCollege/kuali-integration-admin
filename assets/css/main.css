@@ -50,4 +50,17 @@
   .card {
     @apply bg-white border border-rule;
   }
+
+  /* Stat band — display-font numerals over a small uppercase caption.
+     Use sparingly: a four- or six-up grid at the top of detail pages
+     answers "is this thing alive / how big is it" at a glance. */
+  .stat {
+    @apply flex flex-col gap-1;
+  }
+  .stat dt {
+    @apply text-[10px] uppercase tracking-wider text-subtle;
+  }
+  .stat dd {
+    @apply font-display text-2xl text-ink leading-none;
+  }
 }
