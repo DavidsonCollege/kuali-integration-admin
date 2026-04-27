@@ -136,9 +136,16 @@
         </button>
       </div>
 
-      <div v-if="loading && !integrations.length" class="text-subtle">
-        Loading integrations…
-      </div>
+      <ul v-if="loading && !integrations.length" class="space-y-2" aria-label="Loading integrations">
+        <li v-for="n in 6" :key="n" class="card p-4">
+          <div class="skeleton h-4 w-1/3"></div>
+          <div class="flex gap-2 mt-2">
+            <div class="skeleton h-3 w-16"></div>
+            <div class="skeleton h-3 w-20"></div>
+          </div>
+          <div class="skeleton h-3 w-2/3 mt-3"></div>
+        </li>
+      </ul>
 
       <div v-else-if="!loading && !visibleIntegrations.length" class="text-subtle">
         {{ filtersActive ? 'No integrations match the current filters.' : 'No integrations found.' }}

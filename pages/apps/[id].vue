@@ -6,7 +6,15 @@
       {{ error }}
     </div>
 
-    <div v-else-if="loading" class="mt-6 text-subtle">Loading app…</div>
+    <div v-else-if="loading" class="mt-6" aria-label="Loading app">
+      <div class="skeleton h-9 w-1/2"></div>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-6 mt-8 pt-6 border-t border-rule">
+        <div v-for="n in 4" :key="n" class="space-y-2">
+          <div class="skeleton h-3 w-16"></div>
+          <div class="skeleton h-7 w-12"></div>
+        </div>
+      </div>
+    </div>
 
     <div v-else-if="app" class="mt-4">
       <header class="mb-8">

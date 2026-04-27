@@ -6,7 +6,21 @@
       {{ error }}
     </div>
 
-    <div v-else-if="loading" class="mt-6 text-subtle">Loading integration…</div>
+    <div v-else-if="loading" class="mt-6" aria-label="Loading integration">
+      <div class="skeleton h-9 w-2/3"></div>
+      <div class="skeleton h-4 w-1/2 mt-3"></div>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-6 mt-8 pt-6 border-t border-rule">
+        <div v-for="n in 4" :key="n" class="space-y-2">
+          <div class="skeleton h-3 w-16"></div>
+          <div class="skeleton h-7 w-12"></div>
+        </div>
+      </div>
+      <ul class="space-y-2 mt-10">
+        <li v-for="n in 4" :key="n" class="card p-3">
+          <div class="skeleton h-4 w-1/3"></div>
+        </li>
+      </ul>
+    </div>
 
     <div v-else-if="integration" class="mt-4">
       <header class="mb-8">

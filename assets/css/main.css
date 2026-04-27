@@ -51,6 +51,13 @@
     @apply bg-white border border-rule;
   }
 
+  /* Skeleton placeholder — used during initial loads in place of a
+     "Loading…" string. The shimmer keyframe is local so it doesn't
+     leak into other animations. */
+  .skeleton {
+    @apply bg-ink/[0.06] animate-pulse rounded-[1px];
+  }
+
   /* Stat band — display-font numerals over a small uppercase caption.
      Use sparingly: a four- or six-up grid at the top of detail pages
      answers "is this thing alive / how big is it" at a glance. */
