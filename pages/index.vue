@@ -77,9 +77,10 @@
         </div>
         <div class="flex items-center gap-2">
           <input
+            ref="searchInputEl"
             v-model="search"
             type="search"
-            placeholder="Search integrations…"
+            placeholder="Search integrations… ( / )"
             class="w-64"
           />
           <select v-model="sort" aria-label="Sort integrations" class="text-sm">
@@ -229,6 +230,8 @@ const cacheKey = useState('integrationsCacheKey', () => null);
 const loading = ref(false);
 const error = ref(null);
 const search = ref('');
+const searchInputEl = ref(null);
+useSearchHotkey(searchInputEl);
 const sort = ref('name-asc'); // 'name-asc' | 'name-desc'
 const kualiFilter = ref('all'); // 'all' | 'kuali' | 'custom'
 const spaceFilter = ref(''); // empty = all spaces

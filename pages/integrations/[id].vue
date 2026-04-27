@@ -49,9 +49,10 @@
           <h2 class="text-xl">Apps using this integration</h2>
           <div v-if="integration.appsUsing?.length" class="flex items-center gap-2">
             <input
+              ref="appsSearchEl"
               v-model="appsSearch"
               type="search"
-              placeholder="Search apps…"
+              placeholder="Search apps… ( / )"
               class="w-56 text-sm"
             />
             <select v-model="appsSort" aria-label="Sort apps" class="text-sm">
@@ -140,6 +141,8 @@ const appsSearch = ref('');
 const appsSort = ref('name-asc');
 const sharedSearch = ref('');
 const sharedSort = ref('name-asc');
+const appsSearchEl = ref(null);
+useSearchHotkey(appsSearchEl);
 
 // `data` is a JSON blob — pull a couple of useful fields out for the header.
 const integrationType = computed(() => integration.value?.data?.__type);
