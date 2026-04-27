@@ -30,7 +30,7 @@
   input,
   select,
   textarea {
-    @apply bg-white border border-rule px-3 py-2 focus:outline-none focus:border-accent;
+    @apply bg-white border border-ink/20 px-3 py-2 focus:outline-none focus:border-accent;
   }
 
   button {
