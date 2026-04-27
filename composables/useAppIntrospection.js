@@ -1,5 +1,9 @@
 // Walks an app's form schema and workflow JSON to surface every integration
-// the app consumes — where it's used, what feeds in, and what comes back out.
+// the app consumes, and — importantly — which gadgets and workflow steps
+// actually consume each integration *output*. The render layer pivots on
+// outputs ("for this integration's `email` field, who reads it?"), so this
+// composable is responsible for resolving raw formKeys to human labels and
+// for tracing every reference back to its consumer.
 //
 // Form-schema shape (confirmed against a real Davidson app, 2026-04-26):
 //   - `formContainer.schema` is a FLAT array. Nesting is encoded in dotted
@@ -10,8 +14,9 @@
 //     types seen so far: IntegrationFill, IntegrationTypeahead.
 //   - Linked-gadget spawns (the Text/Email entries auto-derived from an
 //     IntegrationFill's outputFields) have `details: null` or `details: {}`
-//     and a child formKey. They are presentation, not a separate use, so
-//     we skip them.
+//     and a child formKey. They aren't a separate integration use, but
+//     they ARE the form-side consumers of an output — we keep them in a
+//     gadget index so the output map can name them.
 //   - `details.inputFields` is keyed by integration param name. Each entry
 //     is `{ required, type, value }` where `type` is "form" (value points
 //     at another formKey via `value: { id, type }`) or "static" (value is
@@ -20,56 +25,169 @@
 //     the contract for what flows back into the form.
 //
 // Workflow shape (confirmed against the Add/Drop Form, 2026-04-27):
-//   - `workflow` is a JSON object. Top-level `workflow.schema` is a *copy*
-//     of the form schema — IGNORE it (we already cover the form side).
-//   - The actual workflow tree lives at `workflow.steps`. Each step has
-//     `_id`, `type`, `stepName`. Container steps (`conditional`, `approval`)
-//     carry `subflows: [{ rule?, steps: [...] }]`. Recurse into
-//     `subflows[].steps`.
+//   - `workflow.steps` is the recursive tree. IGNORE `workflow.schema` —
+//     it's a duplicate of the form schema.
+//   - Container steps `conditional` and `approval` carry
+//     `subflows: [{ rule?, steps: [...] }]`. Recurse into subflows.
 //   - Step types observed: formfill, conditional, approval, notification.
-//     The sample app has no `integration` step type — we still match it as
-//     a future-proofing hook, since the introspection schema includes
-//     `InvokeSendIntegrationInput`.
-//   - Workflow integrations are usually *indirect*: a conditional rule, a
-//     notification template, or an assignee value referencing a `formKey`
-//     that lives under an integration gadget's namespace. We detect these
-//     by collecting every `formKey:` value AND every `{{data.X.Y}}`
-//     template placeholder inside a step, then checking whether the
-//     reference falls under an integration gadget's owner prefix (the
-//     formKey of an IntegrationFill/IntegrationTypeahead gadget). The
-//     form walker is the source of truth for those owner prefixes.
+//     We also keep a future-proofing branch for an explicit `integration`
+//     step type (the schema has `InvokeSendIntegrationInput`).
+//   - Workflow integrations are usually *indirect*: a notification subject
+//     references `{{data.X.email}}`, a conditional rule reads `data.X.major`,
+//     etc. We collect every formKey-style reference inside each step (with
+//     a tag for whether it came from a `rule`, a `template` placeholder, or
+//     somewhere else) and match each one to an integration owner prefix.
 
 export function useAppIntrospection() {
   const introspect = (app) => {
-    const form = walkFormSchema(app?.formContainer?.schema);
-    const workflow = walkWorkflow(app?.workflow, form);
+    const gadgetIndex = indexGadgets(app?.formContainer?.schema);
+    const integrations = collectIntegrationGadgets(app?.formContainer?.schema, gadgetIndex);
+    if (integrations.length === 0) {
+      return { integrations: [], gadgetIndex, totals: { form: 0, workflow: 0 } };
+    }
+
+    // Each integration carries a map of output-path -> consumers. Pre-populate
+    // it from declared outputFields so we can flag declared-but-unconsumed.
+    const ownerByPrefix = new Map();
+    for (const integration of integrations) {
+      ownerByPrefix.set(integration.formKey, integration);
+      for (const out of integration.outputs) {
+        out.consumers = []; // form-side and workflow-side consumers land here
+      }
+    }
+
+    let formConsumerCount = 0;
+    let workflowConsumerCount = 0;
+
+    // Form-side consumers: any non-integration gadget whose formKey lives
+    // under an integration's owner prefix is a child consumer of that
+    // integration's output. The auto-spawned Text/Email gadgets land here.
+    for (const gadget of gadgetIndex.list) {
+      if (gadget.isIntegrationGadget) continue;
+      const owner = matchOwner(gadget.formKey, ownerByPrefix);
+      if (!owner) continue;
+      const outputPath = relativePath(gadget.formKey, owner.formKey);
+      const out = owner.outputsByPath.get(outputPath) || ensureUndeclaredOutput(owner, outputPath);
+      out.consumers.push({
+        side: 'form',
+        evidence: 'spawned-gadget',
+        gadgetLabel: gadget.label || '(unnamed)',
+        gadgetType: gadget.type,
+        formKey: gadget.formKey,
+      });
+      formConsumerCount++;
+    }
+
+    // Workflow-side consumers: walk every step and tag each formKey-shaped
+    // reference with the field path it was found in (rule / template / config).
+    walkWorkflow(app?.workflow, (step, stepPath, references) => {
+      for (const ref of references) {
+        const owner = matchOwner(ref.formKey, ownerByPrefix);
+        if (!owner) continue;
+        const outputPath = relativePath(ref.formKey, owner.formKey);
+        const out = owner.outputsByPath.get(outputPath) || ensureUndeclaredOutput(owner, outputPath);
+        // Dedupe — a single step often references the same path several
+        // times (subject + body + assignee). One consumer entry per
+        // {step, evidence} is plenty.
+        const key = `${step._id || step.stepName}|${ref.evidence}`;
+        if (out.consumers.some((c) => c._dedupe === key)) continue;
+        out.consumers.push({
+          side: 'workflow',
+          evidence: ref.evidence,
+          stepName: step.stepName || '(unnamed step)',
+          stepType: step.type,
+          stepPath,
+          formKey: ref.formKey,
+          _dedupe: key,
+        });
+        workflowConsumerCount++;
+      }
+
+      // Future-proofing: explicit `integration` step type counts as a direct
+      // workflow consumer of every output of that integration.
+      if (step.type === 'integration') {
+        const integrationId = step.integrationId || step.details?.id || step.config?.integrationId;
+        const integration = integrations.find((i) => i.integrationId === integrationId);
+        if (integration) {
+          for (const out of integration.outputs) {
+            out.consumers.push({
+              side: 'workflow',
+              evidence: 'integration-step',
+              stepName: step.stepName || '(unnamed step)',
+              stepType: step.type,
+              stepPath,
+              formKey: '',
+            });
+            workflowConsumerCount++;
+          }
+        }
+      }
+    });
+
+    // Resolve every input's source-formKey to a human gadget label.
+    for (const integration of integrations) {
+      for (const input of integration.inputs) {
+        if (input.sourceType === 'form' && input.pointsAt) {
+          const target = gadgetIndex.byFormKey.get(input.pointsAt);
+          if (target) {
+            input.pointsAtLabel = target.label || '';
+            input.pointsAtType = target.type || '';
+          }
+        }
+      }
+    }
+
     return {
-      form,
-      workflow,
-      grouped: groupByIntegration([...form, ...workflow]),
+      integrations,
+      gadgetIndex,
+      totals: { form: formConsumerCount, workflow: workflowConsumerCount },
     };
   };
 
   return { introspect };
 }
 
-function walkFormSchema(schema) {
+// ---------- Form schema indexing ----------
+
+function indexGadgets(schema) {
+  const list = [];
+  const byFormKey = new Map();
+  if (Array.isArray(schema)) {
+    for (const entry of schema) {
+      if (!entry || typeof entry !== 'object' || !entry.formKey) continue;
+      const node = {
+        formKey: entry.formKey,
+        type: entry.type || '',
+        label: entry.label || '',
+        isIntegrationGadget: isIntegrationGadget(entry),
+      };
+      list.push(node);
+      byFormKey.set(node.formKey, node);
+    }
+  }
+  return { list, byFormKey };
+}
+
+function collectIntegrationGadgets(schema, gadgetIndex) {
   if (!Array.isArray(schema)) return [];
-  const refs = [];
+  const integrations = [];
   for (const entry of schema) {
     if (!isIntegrationGadget(entry)) continue;
-    refs.push({
-      source: 'form',
+    const outputs = extractOutputs(entry.details.outputFields);
+    const outputsByPath = new Map();
+    for (const out of outputs) outputsByPath.set(out.path, out);
+    integrations.push({
+      integrationId: entry.details.id,
+      integrationLabel: entry.details.label || '',
       formKey: entry.formKey,
       gadgetType: entry.type,
       gadgetLabel: entry.label || '',
-      integrationId: entry.details.id,
-      integrationLabel: entry.details.label || '',
       inputs: extractInputs(entry.details.inputFields),
-      outputs: extractOutputs(entry.details.outputFields),
+      outputs,
+      outputsByPath,
     });
   }
-  return refs;
+  return integrations;
 }
 
 function isIntegrationGadget(entry) {
@@ -84,16 +202,15 @@ function extractInputs(inputFields) {
   return Object.entries(inputFields).map(([name, conf]) => {
     const sourceType = conf?.type || 'unknown';
     let pointsAt = null;
-    if (sourceType === 'form') {
-      pointsAt = conf?.value?.id ?? null;
-    } else if (sourceType === 'static') {
-      pointsAt = conf?.value ?? null;
-    }
+    if (sourceType === 'form') pointsAt = conf?.value?.id ?? null;
+    else if (sourceType === 'static') pointsAt = conf?.value ?? null;
     return {
       name,
       sourceType,
       required: Boolean(conf?.required),
       pointsAt,
+      pointsAtLabel: '',
+      pointsAtType: '',
     };
   });
 }
@@ -104,140 +221,104 @@ function extractOutputs(outputFields) {
     label: f?.label || '',
     path: f?.path || '',
     type: f?.type || '',
+    declared: true,
+    consumers: [],
   }));
 }
 
-// Match `{{data.something[0].deeper}}` template placeholders in notification
-// bodies / subjects. Captures the formKey-style path so we can match it
-// against integration gadget owner prefixes.
+function ensureUndeclaredOutput(integration, path) {
+  // A reference points at `<owner>.<path>` for which the integration didn't
+  // declare an outputField. We still track the consumer — surfacing it as
+  // "undeclared output" is a real finding (probably a stale form field, or a
+  // schema drift in the integration). Render side decides how to flag it.
+  const out = {
+    label: '',
+    path,
+    type: '',
+    declared: false,
+    consumers: [],
+  };
+  integration.outputs.push(out);
+  integration.outputsByPath.set(path, out);
+  return out;
+}
+
+// ---------- Workflow walking ----------
+
+// Match `{{ data.something[0].deeper }}` template placeholders.
 const TEMPLATE_FORMKEY_RE = /\{\{\s*(data\.[A-Za-z0-9_.\[\]\-]+)\s*\}\}/g;
 
-function walkWorkflow(workflow, formRefs) {
-  if (!workflow || typeof workflow !== 'object') return [];
+function walkWorkflow(workflow, onStep) {
+  if (!workflow || typeof workflow !== 'object') return;
   const steps = Array.isArray(workflow.steps) ? workflow.steps : [];
-  if (steps.length === 0) return [];
+  if (steps.length === 0) return;
 
-  // Build a lookup so workflow references like `data.VQnO6zWt3R.data.email`
-  // can be traced back to the IntegrationFill at `data.VQnO6zWt3R`.
-  const owners = (formRefs || []).map((r) => ({
-    prefix: r.formKey,
-    integrationId: r.integrationId,
-    integrationLabel: r.integrationLabel,
-  }));
-
-  const refs = [];
   const visit = (step, locationPath) => {
     if (!step || typeof step !== 'object') return;
-    const path = [...locationPath, step.stepName || step.type || 'step'];
+    const stepPath = [...locationPath, step.stepName || step.type || 'step'].join(' › ');
 
-    // Future-proofing: if Kuali ever ships an `integration` step type, treat
-    // it as an explicit invoke. Look for a few plausible id field names.
-    if (step.type === 'integration') {
-      const integrationId = step.integrationId || step.details?.id || step.config?.integrationId;
-      if (integrationId) {
-        refs.push({
-          source: 'workflow',
-          formKey: '',
-          gadgetType: step.type,
-          gadgetLabel: step.stepName || '',
-          stepPath: path.join(' › '),
-          integrationId,
-          integrationLabel: step.label || step.details?.label || '',
-          inputs: [],
-          outputs: [],
-        });
-      }
-    }
+    // Tagged collection: walk every nested string/object and label each
+    // reference by the *field name path* it came from. Lets the render layer
+    // say "rule" vs "template" vs "config" instead of just "workflow".
+    const references = [];
+    collectTaggedRefs(step, [], references);
 
-    // Indirect references: any formKey/template placeholder inside this step
-    // that falls under an integration gadget's namespace.
-    if (owners.length > 0) {
-      const seen = new Set();
-      for (const fk of collectFormKeyRefs(step)) {
-        const owner = matchOwner(fk, owners);
-        if (!owner) continue;
-        const dedupeKey = owner.integrationId + '|' + fk;
-        if (seen.has(dedupeKey)) continue;
-        seen.add(dedupeKey);
-        refs.push({
-          source: 'workflow',
-          formKey: fk,
-          gadgetType: step.type,
-          gadgetLabel: step.stepName || '',
-          stepPath: path.join(' › '),
-          integrationId: owner.integrationId,
-          integrationLabel: owner.integrationLabel,
-          inputs: [],
-          outputs: [],
-        });
-      }
-    }
+    onStep(step, stepPath, references);
 
-    // Recurse — `conditional` and `approval` steps both carry subflows.
     if (Array.isArray(step.subflows)) {
       for (const sub of step.subflows) {
         if (Array.isArray(sub?.steps)) {
-          for (const child of sub.steps) visit(child, path);
+          for (const child of sub.steps) visit(child, [...locationPath, step.stepName || step.type || 'step']);
         }
       }
     }
   };
 
   for (const step of steps) visit(step, []);
-  return refs;
 }
 
-// Walk an arbitrary subtree and yield every formKey-shaped reference inside
-// it: structured `formKey: "data.X.Y"` values AND `{{data.X.Y}}` placeholders
-// found in any string field. Used by walkWorkflow to find integration uses
-// that are encoded as data references rather than as explicit step config.
-function collectFormKeyRefs(node) {
-  const out = [];
-  const visit = (n) => {
-    if (!n) return;
-    if (typeof n === 'string') {
-      for (const m of n.matchAll(TEMPLATE_FORMKEY_RE)) out.push(m[1]);
-      return;
+function collectTaggedRefs(node, fieldPath, out) {
+  if (!node) return;
+  if (typeof node === 'string') {
+    const evidence = inferEvidence(fieldPath);
+    for (const m of node.matchAll(TEMPLATE_FORMKEY_RE)) {
+      out.push({ formKey: m[1], evidence, fieldPath });
     }
-    if (Array.isArray(n)) { n.forEach(visit); return; }
-    if (typeof n !== 'object') return;
-    for (const [k, v] of Object.entries(n)) {
-      // `formKey` is the canonical pointer name; `id` inside an
-      // `inputFields[*].value` block also holds a formKey-shaped string.
-      if ((k === 'formKey' || k === 'id') && typeof v === 'string' && v.startsWith('data.')) {
-        out.push(v);
-      } else {
-        visit(v);
-      }
+    return;
+  }
+  if (Array.isArray(node)) {
+    node.forEach((item, idx) => collectTaggedRefs(item, [...fieldPath, String(idx)], out));
+    return;
+  }
+  if (typeof node !== 'object') return;
+  for (const [k, v] of Object.entries(node)) {
+    if ((k === 'formKey' || k === 'id') && typeof v === 'string' && v.startsWith('data.')) {
+      out.push({ formKey: v, evidence: inferEvidence([...fieldPath, k]), fieldPath: [...fieldPath, k] });
+    } else {
+      collectTaggedRefs(v, [...fieldPath, k], out);
     }
-  };
-  visit(node);
-  return out;
+  }
 }
 
-function matchOwner(formKey, owners) {
-  for (const o of owners) {
-    if (formKey === o.prefix || formKey.startsWith(o.prefix + '.')) return o;
+function inferEvidence(fieldPath) {
+  const joined = fieldPath.join('.').toLowerCase();
+  if (joined.includes('rule') || joined.includes('condition')) return 'rule';
+  if (joined.includes('template') || joined.includes('subject') || joined.includes('body') || joined.includes('message')) return 'template';
+  if (joined.includes('assignee') || joined.includes('approver') || joined.includes('recipient')) return 'assignee';
+  return 'config';
+}
+
+// ---------- Helpers ----------
+
+function matchOwner(formKey, ownerByPrefix) {
+  for (const [prefix, owner] of ownerByPrefix) {
+    if (formKey === prefix || formKey.startsWith(prefix + '.')) return owner;
   }
   return null;
 }
 
-function groupByIntegration(refs) {
-  const map = new Map();
-  for (const ref of refs) {
-    const key = ref.integrationId;
-    if (!map.has(key)) {
-      map.set(key, {
-        integrationId: key,
-        integrationLabel: ref.integrationLabel,
-        uses: [],
-      });
-    }
-    const group = map.get(key);
-    if (!group.integrationLabel && ref.integrationLabel) {
-      group.integrationLabel = ref.integrationLabel;
-    }
-    group.uses.push(ref);
-  }
-  return [...map.values()];
+function relativePath(fullKey, prefix) {
+  if (fullKey === prefix) return '';
+  if (fullKey.startsWith(prefix + '.')) return fullKey.slice(prefix.length + 1);
+  return fullKey;
 }

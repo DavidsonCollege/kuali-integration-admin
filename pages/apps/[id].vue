@@ -55,84 +55,135 @@
         </p>
 
         <div v-else>
-          <div v-if="introspection.grouped.length === 0" class="card p-4 text-sm text-muted">
+          <div v-if="introspection.integrations.length === 0" class="card p-4 text-sm text-muted">
             No integration references found in this app's form or workflow.
           </div>
 
-          <div v-else class="space-y-4">
+          <div v-else class="space-y-6">
             <article
-              v-for="g in introspection.grouped"
-              :key="g.integrationId"
-              class="card p-4"
+              v-for="integration in introspection.integrations"
+              :key="integration.formKey"
+              class="card p-5"
             >
-              <header class="flex items-baseline justify-between gap-3">
-                <h3 class="text-lg">
-                  <NuxtLink
-                    :to="`/integrations/${g.integrationId}`"
-                    class="text-accent hover:underline"
-                  >
-                    {{ g.integrationLabel || g.integrationId }}
-                  </NuxtLink>
-                </h3>
-                <code class="text-xs text-subtle">{{ g.integrationId }}</code>
+              <header class="flex items-baseline justify-between gap-3 flex-wrap">
+                <div>
+                  <h3 class="text-lg">
+                    <NuxtLink
+                      :to="`/integrations/${integration.integrationId}`"
+                      class="text-accent hover:underline"
+                    >
+                      {{ integration.integrationLabel || integration.gadgetLabel || integration.integrationId }}
+                    </NuxtLink>
+                  </h3>
+                  <p class="text-xs text-subtle mt-1">
+                    {{ integration.gadgetType }} · gadget "{{ integration.gadgetLabel || '(unnamed)' }}"
+                    · <code class="font-mono">{{ integration.formKey }}</code>
+                  </p>
+                </div>
+                <div class="text-xs text-subtle text-right">
+                  {{ integration.outputs.length }} output{{ integration.outputs.length === 1 ? '' : 's' }}
+                  · {{ totalConsumers(integration) }} consumer{{ totalConsumers(integration) === 1 ? '' : 's' }}
+                </div>
               </header>
-              <p class="text-sm text-muted mt-1">
-                Used in {{ g.uses.length }} place{{ g.uses.length === 1 ? '' : 's' }}
-              </p>
 
-              <ul class="mt-3 space-y-3">
-                <li
-                  v-for="(use, i) in g.uses"
-                  :key="i"
-                  class="border-l-2 border-rule pl-3"
-                >
-                  <div class="flex items-baseline justify-between gap-2">
-                    <span class="text-sm">
-                      <span class="font-medium">{{ use.gadgetLabel || '(unnamed)' }}</span>
-                      <span class="ml-2 text-xs text-subtle">{{ useLocation(use) }}</span>
+              <!-- Inputs: what feeds the integration. -->
+              <div v-if="integration.inputs.length" class="mt-5">
+                <h4 class="text-xs uppercase tracking-wider text-subtle mb-2">Inputs</h4>
+                <ul class="text-sm divide-y divide-rule border border-rule">
+                  <li
+                    v-for="(input, i) in integration.inputs"
+                    :key="i"
+                    class="px-3 py-2 flex items-baseline gap-3"
+                  >
+                    <code class="font-mono text-xs shrink-0 min-w-[10rem]">{{ input.name }}</code>
+                    <span class="text-subtle text-xs shrink-0">←</span>
+                    <span class="flex-1 text-sm">
+                      <template v-if="input.sourceType === 'form'">
+                        <span v-if="input.pointsAtLabel">
+                          Form field <span class="font-medium">"{{ input.pointsAtLabel }}"</span>
+                          <span v-if="input.pointsAtType" class="text-subtle text-xs ml-1">({{ input.pointsAtType }})</span>
+                        </span>
+                        <span v-else class="text-muted">
+                          Form reference <code class="font-mono text-xs">{{ input.pointsAt || '—' }}</code>
+                        </span>
+                      </template>
+                      <template v-else-if="input.sourceType === 'static'">
+                        Static <span class="font-mono text-xs">"{{ input.pointsAt }}"</span>
+                      </template>
+                      <template v-else>
+                        <span class="text-subtle">{{ input.sourceType }}</span>
+                      </template>
                     </span>
-                    <code class="text-xs text-subtle">{{ use.formKey }}</code>
-                  </div>
+                    <span v-if="input.required" class="text-xs text-accent shrink-0">required</span>
+                  </li>
+                </ul>
+              </div>
 
-                  <div v-if="use.inputs.length" class="mt-1 text-xs text-muted">
-                    <span class="text-subtle">Inputs:</span>
-                    <span
-                      v-for="(inp, j) in use.inputs"
-                      :key="j"
-                      class="ml-2"
-                    >
-                      <code class="font-mono">{{ inp.name }}</code>
-                      <span class="text-subtle">
-                        ←
-                        <template v-if="inp.sourceType === 'form'">form {{ inp.pointsAt || '—' }}</template>
-                        <template v-else-if="inp.sourceType === 'static'">static "{{ inp.pointsAt }}"</template>
-                        <template v-else>{{ inp.sourceType }}</template>
-                      </span>
-                      <span v-if="inp.required" class="text-accent">*</span><span v-if="j < use.inputs.length - 1">,</span>
-                    </span>
-                  </div>
-
-                  <div v-if="use.outputs.length" class="mt-1 text-xs text-muted">
-                    <span class="text-subtle">Outputs ({{ use.outputs.length }}):</span>
-                    <span
-                      v-for="(o, k) in use.outputs.slice(0, 6)"
-                      :key="k"
-                      class="ml-2"
-                    >
-                      <code class="font-mono">{{ o.path }}</code><span v-if="k < Math.min(use.outputs.length, 6) - 1">,</span>
-                    </span>
-                    <span v-if="use.outputs.length > 6" class="ml-1 text-subtle">
-                      … +{{ use.outputs.length - 6 }} more
-                    </span>
-                  </div>
-                </li>
-              </ul>
+              <!-- Outputs pivoted on consumers — the headline view. -->
+              <div class="mt-5">
+                <h4 class="text-xs uppercase tracking-wider text-subtle mb-2">
+                  Outputs &amp; where they're used
+                </h4>
+                <div v-if="!integration.outputs.length" class="text-sm text-muted">
+                  This integration declares no output fields.
+                </div>
+                <ul v-else class="space-y-3">
+                  <li
+                    v-for="output in integration.outputs"
+                    :key="output.path"
+                    class="border-l-2 pl-3"
+                    :class="output.consumers.length === 0 ? 'border-rule' : 'border-ink/40'"
+                  >
+                    <div class="flex items-baseline justify-between gap-3 flex-wrap">
+                      <div>
+                        <span class="font-medium text-sm">
+                          {{ output.label || output.path }}
+                        </span>
+                        <code class="font-mono text-xs text-subtle ml-2">{{ output.path }}</code>
+                        <span v-if="output.type" class="text-xs text-subtle ml-2">({{ output.type }})</span>
+                        <span v-if="!output.declared" class="text-xs text-accent ml-2">undeclared</span>
+                      </div>
+                      <div class="text-xs text-subtle">
+                        {{ output.consumers.length }} consumer{{ output.consumers.length === 1 ? '' : 's' }}
+                      </div>
+                    </div>
+                    <ul v-if="output.consumers.length" class="mt-2 space-y-1 text-sm">
+                      <li
+                        v-for="(consumer, i) in output.consumers"
+                        :key="i"
+                        class="flex items-baseline gap-2 text-muted"
+                      >
+                        <span class="text-xs uppercase tracking-wider w-20 shrink-0 text-subtle">
+                          {{ consumer.side }}
+                        </span>
+                        <span>
+                          <template v-if="consumer.side === 'form'">
+                            Field <span class="font-medium text-ink">"{{ consumer.gadgetLabel }}"</span>
+                            <span class="text-xs text-subtle ml-1">({{ consumer.gadgetType }})</span>
+                          </template>
+                          <template v-else>
+                            <span class="font-medium text-ink">{{ consumer.stepType }}</span>
+                            step <span class="font-medium text-ink">"{{ consumer.stepName }}"</span>
+                            <span class="text-xs text-subtle ml-1">— via {{ consumer.evidence }}</span>
+                            <div v-if="consumer.stepPath && consumer.stepPath !== consumer.stepName" class="text-xs text-subtle">
+                              {{ consumer.stepPath }}
+                            </div>
+                          </template>
+                        </span>
+                      </li>
+                    </ul>
+                    <p v-else class="mt-1 text-xs text-muted italic">
+                      Defined but not read by any form gadget or workflow step.
+                    </p>
+                  </li>
+                </ul>
+              </div>
             </article>
           </div>
 
           <p class="mt-3 text-xs text-subtle italic">
-            Form scan: {{ introspection.form.length }} reference{{ introspection.form.length === 1 ? '' : 's' }}
-            · Workflow scan: {{ introspection.workflow.length }} reference{{ introspection.workflow.length === 1 ? '' : 's' }}
+            {{ introspection.totals.form }} form-side consumer{{ introspection.totals.form === 1 ? '' : 's' }}
+            · {{ introspection.totals.workflow }} workflow-side reference{{ introspection.totals.workflow === 1 ? '' : 's' }}
           </p>
         </div>
       </section>
@@ -158,16 +209,10 @@ const error = ref(null);
 
 const introspecting = ref(false);
 const introspectionRun = ref(false);
-const introspection = ref({ form: [], workflow: [], grouped: [] });
+const introspection = ref({ integrations: [], gadgetIndex: { list: [], byFormKey: new Map() }, totals: { form: 0, workflow: 0 } });
 
-const useLocation = (use) => {
-  if (use.source === 'form') return `form · ${use.gadgetType}`;
-  if (use.source === 'workflow') {
-    const kind = use.gadgetType || 'step';
-    return use.stepPath ? `workflow · ${kind} · ${use.stepPath}` : `workflow · ${kind}`;
-  }
-  return use.gadgetType || use.source;
-};
+const totalConsumers = (integration) =>
+  integration.outputs.reduce((acc, o) => acc + o.consumers.length, 0);
 
 const submissionCount = computed(() => app.value?.documentConnection?.totalCount ?? 0);
 const lastSubmittedAt = computed(() => {
