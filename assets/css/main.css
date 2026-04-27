@@ -1,0 +1,53 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Tokens (accent / ink / muted / subtle / rule / surface) come from
+   theme.config.js via tailwind.config.js — see project README to rebrand. */
+
+@layer base {
+  body {
+    @apply font-sans text-ink bg-surface antialiased;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    @apply font-serif;
+  }
+
+  a {
+    @apply text-accent underline-offset-2;
+  }
+
+  a:hover {
+    @apply underline;
+  }
+
+  input,
+  select,
+  textarea {
+    @apply bg-white border border-rule px-3 py-2 focus:outline-none focus:border-accent;
+  }
+
+  button {
+    @apply font-medium;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply inline-flex items-center justify-center bg-accent text-white px-4 py-2 hover:opacity-90 transition-opacity;
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center justify-center border border-rule px-4 py-2 hover:border-accent transition-colors;
+  }
+
+  .card {
+    @apply bg-white border border-rule;
+  }
+}
