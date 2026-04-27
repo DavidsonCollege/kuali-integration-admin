@@ -26,6 +26,11 @@ export const useApiKey = () => {
   // by the connect form on the home page.
   const authError = useState('authError', () => null);
 
+  // Viewer payload (whose token this is) — populated by the connect flow
+  // after a successful getViewer. Used in the footer / disconnect dropdown
+  // so the user can see whose credentials are loaded.
+  const viewer = useState('viewer', () => null);
+
   const setApiKey = (key, url) => {
     apiKey.value = key;
     baseUrl.value = url || DEFAULT_BASE;
@@ -38,11 +43,12 @@ export const useApiKey = () => {
   const clearApiKey = () => {
     apiKey.value = '';
     baseUrl.value = DEFAULT_BASE;
+    viewer.value = null;
     if (import.meta.client) {
       localStorage.removeItem(STORAGE_KEY);
       localStorage.removeItem(STORAGE_URL);
     }
   };
 
-  return { apiKey, baseUrl, hasApiKey, authError, setApiKey, clearApiKey };
+  return { apiKey, baseUrl, hasApiKey, authError, viewer, setApiKey, clearApiKey };
 };

@@ -177,7 +177,7 @@
 <script setup>
 import { getIntegrations, getSpaces, getViewer } from '~/graphql/queries';
 
-const { hasApiKey, setApiKey, authError, apiKey, baseUrl } = useApiKey();
+const { hasApiKey, setApiKey, authError, apiKey, baseUrl, viewer } = useApiKey();
 const { request } = useGraphQL();
 
 // ---------- Connect form ----------
@@ -194,8 +194,10 @@ const onConnect = async () => {
   authError.value = null;
   setApiKey(form.apiKey, form.baseUrl);
   try {
-    // Sanity check the credentials before we let the user in.
-    await request(getViewer);
+    // Sanity check the credentials before we let the user in. Stash the
+    // viewer payload so the footer can show whose token is loaded.
+    const v = await request(getViewer);
+    viewer.value = v?.viewer?.user || null;
     await loadAllIntegrations();
   } catch (e) {
     connectError.value = `Could not authenticate: ${e.message || e}`;
@@ -355,7 +357,16 @@ const loadAllIntegrations = async ({ force = false } = {}) => {
 };
 
 onMounted(() => {
-  if (hasApiKey.value) loadAllIntegrations();
+  if (hasApiKey.value) {
+    loadAllIntegrations();
+    // Backfill viewer info on a warm reload (token was already in
+    // localStorage, so we skipped the connect-form path).
+    if (!viewer.value) {
+      request(getViewer)
+        .then((v) => { viewer.value = v?.viewer?.user || null; })
+        .catch(() => {}); // 401 handling is centralized in useGraphQL
+    }
+  }
   nowTimer = setInterval(() => { now.value = Date.now(); }, 30_000);
 });
 

@@ -24,9 +24,16 @@
       <slot />
     </main>
 
-    <footer class="border-t border-rule mt-12 py-6">
-      <div class="max-w-6xl mx-auto px-6 flex items-center justify-end text-sm text-subtle">
-        <span class="font-display tracking-wide">Built on Kuali Build</span>
+    <footer class="border-t border-rule mt-12 py-4">
+      <div class="max-w-6xl mx-auto px-6 flex items-center justify-between gap-4 text-xs text-subtle">
+        <div v-if="hasApiKey" class="flex items-center gap-3 truncate">
+          <span class="font-mono">{{ tenantHost }}</span>
+          <span v-if="viewer" class="truncate">
+            · {{ viewer.email || viewer.username || viewer.displayName }}
+          </span>
+        </div>
+        <span v-else></span>
+        <span class="font-display uppercase tracking-wider">Built on Kuali Build</span>
       </div>
     </footer>
   </div>
@@ -34,7 +41,7 @@
 
 <script setup>
 const route = useRoute();
-const { hasApiKey, baseUrl, clearApiKey } = useApiKey();
+const { hasApiKey, baseUrl, clearApiKey, viewer } = useApiKey();
 
 const tenantHost = computed(() => {
   try {
