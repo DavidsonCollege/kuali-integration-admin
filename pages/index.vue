@@ -45,7 +45,10 @@
 
     <!-- Integrations browser — main UI once connected. -->
     <section v-else>
-      <div class="flex items-end justify-between gap-6 mb-4">
+      <!-- Sticky controls: header + search/sort + filter chips stay put on
+           scroll so the list can be navigated without losing controls. -->
+      <div class="sticky top-0 -mx-6 px-6 pt-2 pb-3 bg-surface/95 backdrop-blur-sm z-10 border-b border-rule mb-4">
+      <div class="flex items-end justify-between gap-6">
         <div>
           <h1 class="text-3xl">Integrations</h1>
           <p class="text-sm text-muted mt-1">
@@ -87,7 +90,7 @@
       </div>
 
       <!-- Filter row: Kuali/Custom chips + space filter. -->
-      <div v-if="integrations.length" class="flex flex-wrap items-center gap-2 mb-4 text-sm">
+      <div v-if="integrations.length" class="flex flex-wrap items-center gap-2 mt-3 text-sm">
         <span class="text-subtle">Show</span>
         <button
           v-for="opt in kualiFilterOptions"
@@ -123,6 +126,7 @@
           Clear filters
         </button>
       </div>
+      </div><!-- /sticky controls -->
 
       <div v-if="error" class="card border-accent p-4 text-accent mb-4">
         <p>{{ error }}</p>

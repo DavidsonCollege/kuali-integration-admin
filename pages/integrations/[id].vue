@@ -44,7 +44,8 @@
       </header>
 
       <section>
-        <div class="flex items-end justify-between gap-4 mb-4 flex-wrap">
+        <!-- Section header sticks while the apps list scrolls. -->
+        <div class="sticky top-0 -mx-6 px-6 pt-2 pb-3 bg-surface/95 backdrop-blur-sm z-10 border-b border-rule mb-4 flex items-end justify-between gap-4 flex-wrap">
           <h2 class="text-xl">Apps using this integration</h2>
           <div v-if="integration.appsUsing?.length" class="flex items-center gap-2">
             <input
