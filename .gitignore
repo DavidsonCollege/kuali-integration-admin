@@ -15,6 +15,7 @@ yarn-error.log*
 .env
 .env.*
 !.env.example
+.scratch
 
 # Editor
 .vscode
