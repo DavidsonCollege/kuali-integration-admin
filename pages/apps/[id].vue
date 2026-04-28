@@ -162,7 +162,10 @@
                 </ul>
               </div>
 
-              <!-- Outputs pivoted on consumers — the headline view. -->
+              <!-- Outputs pivoted on consumers — the headline view. Active
+                   outputs (placed on the form or referenced somewhere) lead;
+                   declared-but-unused and undeclared groups collapse below
+                   so the demo isn't drowned in dim rows. -->
               <div class="mt-5">
                 <h4 class="text-xs uppercase tracking-wider text-subtle mb-2">
                   Outputs &amp; where they're used
@@ -170,77 +173,68 @@
                 <div v-if="!selected.outputs.length" class="text-sm text-muted">
                   This integration declares no output fields.
                 </div>
-                <ul v-else class="space-y-3">
-                  <li
-                    v-for="output in selected.outputs"
-                    :key="output.path"
-                    class="border-l-2 pl-3"
-                    :class="outputBorderClass(output)"
+                <template v-else>
+                  <ul v-if="activeOutputs.length" class="space-y-3">
+                    <IntegrationOutputItem
+                      v-for="output in activeOutputs"
+                      :key="output.path"
+                      :output="output"
+                    />
+                  </ul>
+                  <p v-else class="text-sm text-muted">
+                    None of this integration's outputs are placed on the form,
+                    chained into another integration, or referenced by a workflow step.
+                  </p>
+
+                  <details
+                    v-if="declaredUnusedOutputs.length"
+                    class="group mt-4 border-t border-rule pt-3"
                   >
-                    <div class="flex items-baseline justify-between gap-3 flex-wrap">
-                      <div>
-                        <span class="font-medium text-sm">
-                          {{ output.label || output.path }}
-                        </span>
-                        <code class="font-mono text-xs text-subtle ml-2">{{ output.path }}</code>
-                        <span v-if="output.type" class="text-xs text-subtle ml-2">({{ output.type }})</span>
-                        <span v-if="!output.declared" class="text-xs text-accent ml-2">undeclared</span>
-                      </div>
-                      <div class="text-xs flex items-center gap-2">
-                        <span
-                          v-if="output.placedOnForm"
-                          class="font-display uppercase tracking-wider text-[10px] border border-ink/30 px-1.5 py-0.5 text-ink"
-                        >
-                          On form
-                        </span>
-                        <span class="text-subtle">
-                          {{ output.consumers.length }} consumer{{ output.consumers.length === 1 ? '' : 's' }}
-                        </span>
-                      </div>
-                    </div>
-
-                    <p v-if="output.placedOnForm" class="mt-1 text-xs text-muted">
-                      Placed on form
-                      <template v-if="output.placedAs">
-                        as <span class="text-ink">"{{ output.placedAs }}"</span>
-                      </template>
+                    <summary class="cursor-pointer list-none flex items-center gap-2 text-sm text-muted hover:text-ink [&::-webkit-details-marker]:hidden">
+                      <span class="inline-block w-3 transition-transform group-open:rotate-90">›</span>
+                      <span>
+                        {{ declaredUnusedOutputs.length }} declared but unused
+                        output{{ declaredUnusedOutputs.length === 1 ? '' : 's' }}
+                      </span>
+                    </summary>
+                    <p class="mt-2 mb-3 ml-5 text-xs text-muted">
+                      The integration declares these output fields, but nothing in this app uses them —
+                      they aren't placed on the form layout, chained into another integration, or referenced by any workflow step.
                     </p>
-
-                    <ul v-if="output.consumers.length" class="mt-2 space-y-1 text-sm">
-                      <li
-                        v-for="(consumer, i) in output.consumers"
-                        :key="i"
-                        class="flex items-baseline gap-2 text-muted"
-                      >
-                        <span class="text-xs uppercase tracking-wider w-20 shrink-0 text-subtle">
-                          {{ consumer.side }}
-                        </span>
-                        <span>
-                          <template v-if="consumer.side === 'form'">
-                            Gadget <span class="font-medium text-ink">"{{ consumer.gadgetLabel }}"</span>
-                            <span class="text-xs text-subtle ml-1">({{ consumer.gadgetType }})</span>
-                            <span class="text-xs text-subtle ml-1">— via {{ consumer.evidence }}</span>
-                          </template>
-                          <template v-else>
-                            <span class="font-medium text-ink">{{ consumer.stepType }}</span>
-                            step <span class="font-medium text-ink">"{{ consumer.stepName }}"</span>
-                            <span class="text-xs text-subtle ml-1">— via {{ consumer.evidence }}</span>
-                            <div v-if="consumer.stepPath && consumer.stepPath !== consumer.stepName" class="text-xs text-subtle">
-                              {{ consumer.stepPath }}
-                            </div>
-                          </template>
-                        </span>
-                      </li>
+                    <ul class="space-y-3 ml-5">
+                      <IntegrationOutputItem
+                        v-for="output in declaredUnusedOutputs"
+                        :key="output.path"
+                        :output="output"
+                      />
                     </ul>
+                  </details>
 
-                    <p
-                      v-if="!output.consumers.length && !output.placedOnForm && output.declared"
-                      class="mt-1 text-xs text-muted italic"
-                    >
-                      Declared but unused — not placed on the form layout, not chained into another integration, and not referenced by any workflow step.
+                  <details
+                    v-if="undeclaredOutputs.length"
+                    class="group mt-4 border-t border-rule pt-3"
+                  >
+                    <summary class="cursor-pointer list-none flex items-center gap-2 text-sm text-muted hover:text-ink [&::-webkit-details-marker]:hidden">
+                      <span class="inline-block w-3 transition-transform group-open:rotate-90">›</span>
+                      <span>
+                        {{ undeclaredOutputs.length }} undeclared
+                        output{{ undeclaredOutputs.length === 1 ? '' : 's' }}
+                      </span>
+                    </summary>
+                    <p class="mt-2 mb-3 ml-5 text-xs text-muted">
+                      Something on the form or in the workflow references a path under this integration that the integration doesn't list in its
+                      <code class="font-mono">outputFields</code>. Usually that's a stale form field left over from when the integration's contract changed,
+                      or schema drift between what the integration actually returns and what was originally declared.
                     </p>
-                  </li>
-                </ul>
+                    <ul class="space-y-3 ml-5">
+                      <IntegrationOutputItem
+                        v-for="output in undeclaredOutputs"
+                        :key="output.path"
+                        :output="output"
+                      />
+                    </ul>
+                  </details>
+                </template>
               </div>
             </article>
           </div>
@@ -281,14 +275,24 @@ const totalConsumers = (integration) =>
 const placedOutputCount = (integration) =>
   integration.outputs.reduce((acc, o) => acc + (o.placedOnForm ? 1 : 0), 0);
 
-const outputBorderClass = (output) => {
-  // Strongest signal first: a placed output is the headline finding the
-  // demo wants to highlight. A consumer-only (chained / workflow) output is
-  // a real but quieter signal. Everything else is dim rule.
-  if (output.placedOnForm) return 'border-ink/40';
-  if (output.consumers.length) return 'border-ink/40';
-  return 'border-rule';
-};
+// Three buckets so the active outputs lead and the noisier ones collapse:
+//   - active: declared AND (on the form OR has consumers) — the headline.
+//   - declaredUnused: declared but nothing in the app uses them.
+//   - undeclared: referenced under this integration but not in outputFields
+//     (stale form field, schema drift). Always collapsed by default.
+const activeOutputs = computed(() =>
+  selected.value
+    ? selected.value.outputs.filter((o) => o.declared && (o.placedOnForm || o.consumers.length > 0))
+    : []
+);
+const declaredUnusedOutputs = computed(() =>
+  selected.value
+    ? selected.value.outputs.filter((o) => o.declared && !o.placedOnForm && o.consumers.length === 0)
+    : []
+);
+const undeclaredOutputs = computed(() =>
+  selected.value ? selected.value.outputs.filter((o) => !o.declared) : []
+);
 
 const submissionCount = computed(() => app.value?.documentConnection?.totalCount ?? 0);
 const lastSubmittedAt = computed(() => {
