@@ -60,8 +60,8 @@
       <section>
         <!-- Section header sticks while the apps list scrolls. -->
         <div class="sticky top-0 -mx-6 px-6 pt-2 pb-3 bg-surface/95 backdrop-blur-sm z-10 border-b border-rule mb-4 flex items-end justify-between gap-4 flex-wrap">
-          <h2 class="text-xl">Apps using this integration</h2>
-          <div v-if="integration.appsUsing?.length" class="flex items-center gap-2">
+          <h2 class="text-xl">Apps with access</h2>
+          <div v-if="combinedApps.length" class="flex items-center gap-2">
             <input
               ref="appsSearchEl"
               v-model="appsSearch"
@@ -76,56 +76,37 @@
           </div>
         </div>
 
-        <p v-if="appsSearch && integration.appsUsing?.length" class="text-xs text-subtle mb-3">
-          {{ visibleAppsUsing.length }} of {{ integration.appsUsing.length }} matching "{{ appsSearch }}"
+        <p v-if="appsSearch && combinedApps.length" class="text-xs text-subtle mb-3">
+          {{ visibleApps.length }} of {{ combinedApps.length }} matching "{{ appsSearch }}"
         </p>
 
-        <div v-if="!integration.appsUsing?.length" class="text-subtle text-sm">
+        <div v-if="!combinedApps.length" class="text-subtle text-sm">
           No apps reference this integration.
         </div>
 
-        <div v-else-if="!visibleAppsUsing.length" class="text-subtle text-sm">
+        <div v-else-if="!visibleApps.length" class="text-subtle text-sm">
           No apps match "{{ appsSearch }}".
         </div>
 
         <ul v-else class="space-y-2">
-          <li v-for="app in visibleAppsUsing" :key="app.id">
+          <li v-for="app in visibleApps" :key="app.id">
             <NuxtLink
               :to="`/apps/${app.id}`"
-              class="card p-3 block hover:border-ink/30 transition-colors no-underline text-ink flex items-center justify-between"
+              class="card p-3 block hover:border-ink/30 transition-colors no-underline text-ink flex items-center justify-between gap-3"
             >
-              <span class="font-medium">{{ app.name }}</span>
-              <span class="text-xs text-subtle">View details &rarr;</span>
+              <span class="font-medium truncate">{{ app.name }}</span>
+              <span class="flex items-center gap-3 shrink-0">
+                <span
+                  class="font-display uppercase tracking-wider text-[10px] px-1.5 py-0.5 border"
+                  :class="app.status === 'using'
+                    ? 'border-ink/30 text-ink'
+                    : 'border-rule text-muted'"
+                >
+                  {{ app.status === 'using' ? 'Using' : 'Has access' }}
+                </span>
+                <span class="text-xs text-subtle">View details &rarr;</span>
+              </span>
             </NuxtLink>
-          </li>
-        </ul>
-      </section>
-
-      <section v-if="integration.sharedWithOthers?.apps?.length" class="mt-10">
-        <div class="flex items-end justify-between gap-4 mb-3 flex-wrap">
-          <h2 class="text-xl">Apps with sharing access</h2>
-          <div class="flex items-center gap-2">
-            <input
-              v-model="sharedSearch"
-              type="search"
-              placeholder="Search apps…"
-              class="w-56 text-sm"
-            />
-            <select v-model="sharedSort" aria-label="Sort sharing apps" class="text-sm">
-              <option value="name-asc">Name (A–Z)</option>
-              <option value="name-desc">Name (Z–A)</option>
-            </select>
-          </div>
-        </div>
-        <p class="text-sm text-muted mb-3">
-          Apps explicitly granted access via the integration's sharing settings.
-        </p>
-        <div v-if="!visibleSharedApps.length" class="text-subtle text-sm">
-          No apps match "{{ sharedSearch }}".
-        </div>
-        <ul v-else class="space-y-1 text-sm">
-          <li v-for="app in visibleSharedApps" :key="app.id" class="text-muted">
-            {{ app.name }}
           </li>
         </ul>
       </section>
@@ -161,12 +142,9 @@ const integration = ref(null);
 const loading = ref(true);
 const error = ref(null);
 
-// Search/sort state for the two app lists on this page. Kept independent so a
-// filter on "Apps using" doesn't also filter "Apps with sharing access".
+// Search/sort state for the combined apps list (using + sharing-only).
 const appsSearch = ref('');
 const appsSort = ref('name-asc');
-const sharedSearch = ref('');
-const sharedSort = ref('name-asc');
 const appsSearchEl = ref(null);
 useSearchHotkey(appsSearchEl);
 
@@ -204,12 +182,22 @@ const filterAndSort = (list, search, sort) => {
   return filtered.sort((a, b) => dir * (a.name || '').localeCompare(b.name || ''));
 };
 
-const visibleAppsUsing = computed(() =>
-  filterAndSort(integration.value?.appsUsing || [], appsSearch.value, appsSort.value)
-);
+// Merge `appsUsing` (apps actively referencing the integration) with
+// `sharedWithOthers.apps` (apps explicitly granted access). Unpublished apps
+// only show up in the sharing list — combining surfaces them. Tag each entry
+// so the UI can distinguish active use from access-only.
+const combinedApps = computed(() => {
+  const using = integration.value?.appsUsing || [];
+  const shared = integration.value?.sharedWithOthers?.apps || [];
+  const usingIds = new Set(using.map((a) => a.id));
+  return [
+    ...using.map((a) => ({ ...a, status: 'using' })),
+    ...shared.filter((a) => !usingIds.has(a.id)).map((a) => ({ ...a, status: 'shared' })),
+  ];
+});
 
-const visibleSharedApps = computed(() =>
-  filterAndSort(integration.value?.sharedWithOthers?.apps || [], sharedSearch.value, sharedSort.value)
+const visibleApps = computed(() =>
+  filterAndSort(combinedApps.value, appsSearch.value, appsSort.value)
 );
 
 const load = async () => {
