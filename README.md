@@ -39,7 +39,3 @@ To drop the Google Fonts dependency entirely, set `googleFontsHref: null` in `th
 - **No backend state.** The proxy is stateless — it forwards the user's bearer token and target endpoint, validates the host is `*.kualibuild.com`, and returns the response.
 
 Because of the Nitro proxy this app needs a runtime to deploy (Node, Cloudflare Workers, Netlify Functions, etc.). It is not deployable as pure static HTML/JS without removing the proxy or moving the GraphQL call elsewhere.
-
-## Project structure
-
-See [CLAUDE.md](CLAUDE.md) for the architectural decisions and [TODO.md](TODO.md) for what's left to build.
