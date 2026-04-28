@@ -89,6 +89,7 @@
                     </div>
                     <div class="text-xs text-subtle mt-0.5">
                       {{ integration.outputs.length }} output{{ integration.outputs.length === 1 ? '' : 's' }}
+                      · {{ placedOutputCount(integration) }} placed
                       · {{ totalConsumers(integration) }} consumer{{ totalConsumers(integration) === 1 ? '' : 's' }}
                     </div>
                   </button>
@@ -114,11 +115,16 @@
                   </h3>
                   <p class="text-xs text-subtle mt-1">
                     {{ selected.gadgetType }} · gadget "{{ selected.gadgetLabel || '(unnamed)' }}"
+                    <span v-if="selected.headless" class="ml-1">· headless</span>
+                    <span class="ml-1">·</span>
+                    <span v-if="selected.placedOnForm" class="text-ink">placed on form</span>
+                    <span v-else>in schema only</span>
                     · <code class="font-mono">{{ selected.formKey }}</code>
                   </p>
                 </div>
                 <div class="text-xs text-subtle text-right">
                   {{ selected.outputs.length }} output{{ selected.outputs.length === 1 ? '' : 's' }}
+                  · {{ placedOutputCount(selected) }} placed
                   · {{ totalConsumers(selected) }} consumer{{ totalConsumers(selected) === 1 ? '' : 's' }}
                 </div>
               </header>
@@ -169,7 +175,7 @@
                     v-for="output in selected.outputs"
                     :key="output.path"
                     class="border-l-2 pl-3"
-                    :class="output.consumers.length === 0 ? 'border-rule' : 'border-ink/40'"
+                    :class="outputBorderClass(output)"
                   >
                     <div class="flex items-baseline justify-between gap-3 flex-wrap">
                       <div>
@@ -180,10 +186,25 @@
                         <span v-if="output.type" class="text-xs text-subtle ml-2">({{ output.type }})</span>
                         <span v-if="!output.declared" class="text-xs text-accent ml-2">undeclared</span>
                       </div>
-                      <div class="text-xs text-subtle">
-                        {{ output.consumers.length }} consumer{{ output.consumers.length === 1 ? '' : 's' }}
+                      <div class="text-xs flex items-center gap-2">
+                        <span
+                          v-if="output.placedOnForm"
+                          class="font-display uppercase tracking-wider text-[10px] border border-ink/30 px-1.5 py-0.5 text-ink"
+                        >
+                          On form
+                        </span>
+                        <span class="text-subtle">
+                          {{ output.consumers.length }} consumer{{ output.consumers.length === 1 ? '' : 's' }}
+                        </span>
                       </div>
                     </div>
+
+                    <p v-if="output.placedOnForm" class="mt-1 text-xs text-muted">
+                      Placed on form
+                      <template v-if="output.placedAs">
+                        as <span class="text-ink">"{{ output.placedAs }}"</span>
+                      </template>
+                    </p>
 
                     <ul v-if="output.consumers.length" class="mt-2 space-y-1 text-sm">
                       <li
@@ -212,14 +233,11 @@
                       </li>
                     </ul>
 
-                    <p v-else-if="output.declared && !output.autoSpawned" class="mt-1 text-xs text-muted italic">
-                      Declared but never referenced — no chained input, visibility rule, or workflow step reads this output.
-                    </p>
-
-                    <p v-if="output.autoSpawned" class="mt-1 text-xs text-subtle italic">
-                      Auto-spawned in schema as <span class="text-ink not-italic">"{{ output.autoSpawned.gadgetLabel }}"</span>
-                      <span class="text-subtle">({{ output.autoSpawned.gadgetType }})</span>.
-                      Whether this gadget is placed on the form layout isn't yet detectable from the data we fetch.
+                    <p
+                      v-if="!output.consumers.length && !output.placedOnForm && output.declared"
+                      class="mt-1 text-xs text-muted italic"
+                    >
+                      Declared but unused — not placed on the form layout, not chained into another integration, and not referenced by any workflow step.
                     </p>
                   </li>
                 </ul>
@@ -259,6 +277,18 @@ const selected = computed(() =>
 
 const totalConsumers = (integration) =>
   integration.outputs.reduce((acc, o) => acc + o.consumers.length, 0);
+
+const placedOutputCount = (integration) =>
+  integration.outputs.reduce((acc, o) => acc + (o.placedOnForm ? 1 : 0), 0);
+
+const outputBorderClass = (output) => {
+  // Strongest signal first: a placed output is the headline finding the
+  // demo wants to highlight. A consumer-only (chained / workflow) output is
+  // a real but quieter signal. Everything else is dim rule.
+  if (output.placedOnForm) return 'border-ink/40';
+  if (output.consumers.length) return 'border-ink/40';
+  return 'border-rule';
+};
 
 const submissionCount = computed(() => app.value?.documentConnection?.totalCount ?? 0);
 const lastSubmittedAt = computed(() => {

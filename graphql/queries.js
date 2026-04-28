@@ -101,11 +101,13 @@ export const getApp = `
       dataset { isPublished }
       formContainer {
         schema {
+          id
           type
           details
           label
           formKey
         }
+        template
       }
       workflow
       documentConnection(args: { limit: 1, sort: ["-meta.serialNumber"] }) {

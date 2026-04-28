@@ -46,17 +46,37 @@
 
 export function useAppIntrospection() {
   const introspect = (app) => {
-    const gadgetIndex = indexGadgets(app?.formContainer?.schema);
-    const integrations = collectIntegrationGadgets(app?.formContainer?.schema, gadgetIndex);
+    const schema = app?.formContainer?.schema;
+    const gadgetIndex = indexGadgets(schema);
+    const integrations = collectIntegrationGadgets(schema, gadgetIndex);
     if (integrations.length === 0) {
-      return { integrations: [], gadgetIndex, totals: { form: 0, workflow: 0 } };
+      return { integrations: [], gadgetIndex, layout: { placedIds: new Set(), dataLinks: [] }, totals: { form: 0, workflow: 0 } };
+    }
+
+    // Layout placement: walk the template tree once and collect every gadget
+    // id that appears in it, plus every DataLink (the canonical "show output
+    // X from integration Y" element). Used to mark each integration and each
+    // output as placed-on-form vs in-schema-only.
+    const layout = walkTemplate(app?.formContainer?.template);
+    for (const integration of integrations) {
+      integration.placedOnForm = layout.placedIds.has(integration.gadgetId);
     }
 
     // Each integration carries a map of output-path -> consumers. Pre-populate
     // it from declared outputFields so we can flag declared-but-unconsumed.
+    //
+    // Gadgets in Kuali have TWO addressable identities: a `formKey` (used in
+    // the schema's data path) and an `id` (used in inputFields refs and
+    // DataLink parentIds). They're different strings — `data.6QTB1QxYvO`
+    // (formKey) and `data.DCBhnVJxs` (id) refer to the same gadget. Register
+    // each integration under both prefixes so references in either form
+    // resolve to the same owner.
     const ownerByPrefix = new Map();
     for (const integration of integrations) {
       ownerByPrefix.set(integration.formKey, integration);
+      if (integration.gadgetId) {
+        ownerByPrefix.set(`data.${integration.gadgetId}`, integration);
+      }
       for (const out of integration.outputs) {
         out.consumers = []; // form-side and workflow-side consumers land here
       }
@@ -65,21 +85,50 @@ export function useAppIntrospection() {
     let formConsumerCount = 0;
     let workflowConsumerCount = 0;
 
-    // Auto-spawned children — informational only. Every declared output
-    // spawns a child gadget; this does NOT prove placement on the form
-    // layout. Tracked per-output so the render layer can show "auto-spawned
-    // as field X" alongside the real consumer list, with honest framing.
+    // Auto-spawned children — every declared output spawns a child gadget
+    // in the schema. The schema tells us NOTHING about whether the user
+    // actually placed that field on the form layout. The template tree does:
+    // a placed output appears as a DataLink with parentId pointing at the
+    // integration's formKey and selectedOutputField.path matching the
+    // output's path. We use that to flag each output as placedOnForm.
     for (const gadget of gadgetIndex.list) {
       if (gadget.isIntegrationGadget) continue;
-      const owner = matchOwner(gadget.formKey, ownerByPrefix);
-      if (!owner) continue;
-      const outputPath = relativePath(gadget.formKey, owner.formKey);
-      const out = owner.outputsByPath.get(outputPath) || ensureUndeclaredOutput(owner, outputPath);
+      const match = matchOwner(gadget.formKey, ownerByPrefix);
+      if (!match) continue;
+      const outputPath = relativePath(gadget.formKey, match.prefix);
+      const out = match.owner.outputsByPath.get(outputPath) || ensureUndeclaredOutput(match.owner, outputPath);
       out.autoSpawned = {
         gadgetLabel: gadget.label || '',
         gadgetType: gadget.type || '',
         formKey: gadget.formKey,
+        // Auto-spawned-child ids (e.g. "DCBhnVJxs.label") rarely appear in
+        // the template directly — placement usually shows up as a DataLink
+        // sibling instead — but we check both for completeness.
+        placedById: gadget.id ? layout.placedIds.has(gadget.id) : false,
       };
+    }
+
+    // Placement via DataLink: layout.dataLinks is the canonical signal.
+    // Each entry is `{ parentFormKey, outputPath, label, dataLinkId }`.
+    for (const link of layout.dataLinks) {
+      const owner = ownerByPrefix.get(link.parentFormKey);
+      if (!owner) continue;
+      const out = owner.outputsByPath.get(link.outputPath) || ensureUndeclaredOutput(owner, link.outputPath);
+      out.placedOnForm = true;
+      // Keep the DataLink's display label so the render can say
+      // "placed as 'Created By' (DataLink)" rather than just "placed".
+      out.placedAs = link.label || out.placedAs || '';
+    }
+    // Backfill: an output is placed if either a DataLink targets it OR the
+    // auto-spawned child gadget id is itself in the template tree.
+    for (const integration of integrations) {
+      for (const out of integration.outputs) {
+        if (out.placedOnForm) continue;
+        if (out.autoSpawned?.placedById) {
+          out.placedOnForm = true;
+          out.placedAs = out.autoSpawned.gadgetLabel || '';
+        }
+      }
     }
 
     // Form-side consumers: walk every gadget in the schema and collect every
@@ -96,15 +145,16 @@ export function useAppIntrospection() {
         if (refs.length === 0) continue;
         const seen = new Set();
         for (const ref of refs) {
-          const owner = matchOwner(ref.formKey, ownerByPrefix);
-          if (!owner) continue;
+          const match = matchOwner(ref.formKey, ownerByPrefix);
+          if (!match) continue;
+          const { owner, prefix } = match;
           // Skip self-references — an integration gadget pointing at its own
           // child outputs is internal plumbing, not a downstream consumer.
           if (owner.formKey === entry.formKey) continue;
           if (ref.formKey === entry.formKey) continue;
           if (entry.formKey.startsWith(owner.formKey + '.')) continue;
 
-          const outputPath = relativePath(ref.formKey, owner.formKey);
+          const outputPath = relativePath(ref.formKey, prefix);
           const out = owner.outputsByPath.get(outputPath) || ensureUndeclaredOutput(owner, outputPath);
           const dedupeKey = `${entry.formKey}|${ref.evidence}`;
           if (seen.has(`${owner.formKey}|${outputPath}|${dedupeKey}`)) continue;
@@ -125,9 +175,10 @@ export function useAppIntrospection() {
     // reference with the field path it was found in (rule / template / config).
     walkWorkflow(app?.workflow, (step, stepPath, references) => {
       for (const ref of references) {
-        const owner = matchOwner(ref.formKey, ownerByPrefix);
-        if (!owner) continue;
-        const outputPath = relativePath(ref.formKey, owner.formKey);
+        const match = matchOwner(ref.formKey, ownerByPrefix);
+        if (!match) continue;
+        const { owner, prefix } = match;
+        const outputPath = relativePath(ref.formKey, prefix);
         const out = owner.outputsByPath.get(outputPath) || ensureUndeclaredOutput(owner, outputPath);
         // Dedupe — a single step often references the same path several
         // times (subject + body + assignee). One consumer entry per
@@ -167,11 +218,13 @@ export function useAppIntrospection() {
       }
     });
 
-    // Resolve every input's source-formKey to a human gadget label.
+    // Resolve every input's source-formKey to a human gadget label. Inputs
+    // are id-based (`data.<gadgetId>.<path>`), so try the id index first
+    // and fall back to the formKey index for completeness.
     for (const integration of integrations) {
       for (const input of integration.inputs) {
         if (input.sourceType === 'form' && input.pointsAt) {
-          const target = gadgetIndex.byFormKey.get(input.pointsAt);
+          const target = gadgetIndex.byId.get(input.pointsAt) || gadgetIndex.byFormKey.get(input.pointsAt);
           if (target) {
             input.pointsAtLabel = target.label || '';
             input.pointsAtType = target.type || '';
@@ -183,6 +236,7 @@ export function useAppIntrospection() {
     return {
       integrations,
       gadgetIndex,
+      layout,
       totals: { form: formConsumerCount, workflow: workflowConsumerCount },
     };
   };
@@ -195,10 +249,12 @@ export function useAppIntrospection() {
 function indexGadgets(schema) {
   const list = [];
   const byFormKey = new Map();
+  const byId = new Map(); // keyed by `data.<gadget.id>` so inputFields refs resolve directly
   if (Array.isArray(schema)) {
     for (const entry of schema) {
       if (!entry || typeof entry !== 'object' || !entry.formKey) continue;
       const node = {
+        id: entry.id || '',
         formKey: entry.formKey,
         type: entry.type || '',
         label: entry.label || '',
@@ -206,9 +262,10 @@ function indexGadgets(schema) {
       };
       list.push(node);
       byFormKey.set(node.formKey, node);
+      if (node.id) byId.set(`data.${node.id}`, node);
     }
   }
-  return { list, byFormKey };
+  return { list, byFormKey, byId };
 }
 
 function collectIntegrationGadgets(schema, gadgetIndex) {
@@ -222,9 +279,11 @@ function collectIntegrationGadgets(schema, gadgetIndex) {
     integrations.push({
       integrationId: entry.details.id,
       integrationLabel: entry.details.label || '',
+      gadgetId: entry.id || '',
       formKey: entry.formKey,
       gadgetType: entry.type,
       gadgetLabel: entry.label || '',
+      headless: Boolean(entry.details.headless),
       inputs: extractInputs(entry.details.inputFields),
       outputs,
       outputsByPath,
@@ -266,6 +325,8 @@ function extractOutputs(outputFields) {
     type: f?.type || '',
     declared: true,
     consumers: [],
+    placedOnForm: false,
+    placedAs: '',
   }));
 }
 
@@ -280,6 +341,8 @@ function ensureUndeclaredOutput(integration, path) {
     type: '',
     declared: false,
     consumers: [],
+    placedOnForm: false,
+    placedAs: '',
   };
   integration.outputs.push(out);
   integration.outputsByPath.set(path, out);
@@ -401,9 +464,14 @@ function inferFormEvidence(fieldPath) {
 
 // ---------- Helpers ----------
 
-function matchOwner(formKey, ownerByPrefix) {
+// Returns `{ owner, prefix }` so callers can compute relativePath against
+// whichever prefix matched (formKey-based vs id-based — see the
+// "two addressable identities" note in introspect()).
+function matchOwner(reference, ownerByPrefix) {
   for (const [prefix, owner] of ownerByPrefix) {
-    if (formKey === prefix || formKey.startsWith(prefix + '.')) return owner;
+    if (reference === prefix || reference.startsWith(prefix + '.')) {
+      return { owner, prefix };
+    }
   }
   return null;
 }
@@ -414,15 +482,50 @@ function relativePath(fullKey, prefix) {
   return fullKey;
 }
 
-// TODO: detect "actually placed on form layout".
-// `formContainer.schema` lists every gadget — including auto-spawned outputs
-// the user never placed on the form. The layout structure (which page /
-// section / column each gadget sits in) lives elsewhere on `FormContainer`.
-// To answer "is this output displayed?" we'd need to add the layout field
-// to the `getApp` query, build a Set of gadget ids/formKeys that appear in
-// the layout, and check each auto-spawned child against that set.
+// ---------- Template walking ----------
 //
-// Next step: live-introspect FormContainer to find the layout field name.
-// Likely candidates: `pages`, `layout`, `sections`, `formLayout`. Once we
-// know the field, augment `getApp` and surface a `displayed: boolean` on
-// each `autoSpawned` entry.
+// `formContainer.template` is the layout tree the user actually built — a
+// recursive structure of containers (Section, Row, Column, Repeater) and
+// gadgets. A gadget is in the template iff the user placed it on the form.
+// Auto-spawned schema entries that the user never placed do NOT appear here.
+//
+// Two outputs from the walk:
+//   - `placedIds`: the set of every gadget id encountered. Used to mark an
+//     integration's primary gadget as placed-on-form.
+//   - `dataLinks`: every DataLink gadget, the canonical "show output X from
+//     integration Y" element. Each carries `parentId` (the integration's
+//     formKey, e.g. "data.nKKmlhYUn") and `selectedOutputField.path` (the
+//     output's path, matching `outputFields[*].path` on the integration).
+//     Mapped to `{ parentFormKey, outputPath, label, dataLinkId }` so the
+//     introspect step can mark the matching output as placedOnForm.
+//
+// Containers carry their children under `children` (Section/Row/Column) or
+// `childrenTemplate` (Repeater). Both are recursed.
+function walkTemplate(template) {
+  const placedIds = new Set();
+  const dataLinks = [];
+  const visit = (node) => {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item);
+      return;
+    }
+    if (typeof node.id === 'string' && node.id) placedIds.add(node.id);
+    if (node.type === 'DataLink' && node.details) {
+      const parentFormKey = node.details.parentId;
+      const sel = node.details.selectedOutputField;
+      if (typeof parentFormKey === 'string' && sel && typeof sel.path === 'string') {
+        dataLinks.push({
+          parentFormKey,
+          outputPath: sel.path,
+          label: node.label || sel.label || '',
+          dataLinkId: node.id || '',
+        });
+      }
+    }
+    if (Array.isArray(node.children)) for (const c of node.children) visit(c);
+    if (Array.isArray(node.childrenTemplate)) for (const c of node.childrenTemplate) visit(c);
+  };
+  visit(template);
+  return { placedIds, dataLinks };
+}
