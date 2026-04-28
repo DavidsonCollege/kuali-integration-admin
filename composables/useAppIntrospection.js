@@ -48,18 +48,50 @@ export function useAppIntrospection() {
   const introspect = (app) => {
     const schema = app?.formContainer?.schema;
     const gadgetIndex = indexGadgets(schema);
-    const integrations = collectIntegrationGadgets(schema, gadgetIndex);
+    const topLevelIntegrations = collectIntegrationGadgets(schema, gadgetIndex);
+
+    // Walk the template tree to collect placement info AND any Repeater-
+    // scoped integrations (which never appear in formContainer.schema).
+    const layout = walkTemplate(app?.formContainer?.template);
+
+    // Lift each Repeater integration into the same shape as a top-level one
+    // so downstream code (rendering, owner-prefix matching) can treat them
+    // uniformly. The repeaterContext travels along so the render layer can
+    // group them visually under their parent Repeater. `details` is kept
+    // on the object so the form-side consumer scan can walk it directly
+    // (Repeater integrations aren't in formContainer.schema).
+    const repeaterIntegrations = layout.repeaterIntegrations.map((g) => {
+      const outputs = extractOutputs(g.details?.outputFields);
+      const outputsByPath = new Map();
+      for (const out of outputs) outputsByPath.set(out.path, out);
+      return {
+        integrationId: g.details?.id || '',
+        integrationLabel: g.details?.label || '',
+        gadgetId: g.id,
+        formKey: g.formKey,
+        gadgetType: g.type,
+        gadgetLabel: g.label,
+        headless: Boolean(g.details?.headless),
+        inputs: extractInputs(g.details?.inputFields),
+        outputs,
+        outputsByPath,
+        details: g.details,
+        repeaterContext: g.repeaterContext,
+      };
+    });
+
+    const integrations = [...topLevelIntegrations, ...repeaterIntegrations];
     if (integrations.length === 0) {
-      return { integrations: [], gadgetIndex, layout: { placedIds: new Set(), dataLinks: [] }, totals: { form: 0, workflow: 0 } };
+      return { integrations: [], gadgetIndex, layout, totals: { form: 0, workflow: 0 } };
     }
 
-    // Layout placement: walk the template tree once and collect every gadget
-    // id that appears in it, plus every DataLink (the canonical "show output
-    // X from integration Y" element). Used to mark each integration and each
-    // output as placed-on-form vs in-schema-only.
-    const layout = walkTemplate(app?.formContainer?.template);
     for (const integration of integrations) {
-      integration.placedOnForm = layout.placedIds.has(integration.gadgetId);
+      // Top-level integrations are placed iff their gadget id is in the
+      // template tree. Repeater integrations are definitionally placed —
+      // they only exist because they appeared in the template.
+      integration.placedOnForm = integration.repeaterContext
+        ? true
+        : layout.placedIds.has(integration.gadgetId);
     }
 
     // Each integration carries a map of output-path -> consumers. Pre-populate
@@ -71,11 +103,25 @@ export function useAppIntrospection() {
     // (formKey) and `data.DCBhnVJxs` (id) refer to the same gadget. Register
     // each integration under both prefixes so references in either form
     // resolve to the same owner.
+    //
+    // Integrations inside a Repeater also need wildcard-prefix registration:
+    // conditional visibility refs use `data.<repeater-fk>.data.*.data.<X>`
+    // while sibling refs (inputFields, DataLink parentIds) keep the plain
+    // `data.<X>` form. Register all four variants so any addressing scheme
+    // resolves to the same owner.
     const ownerByPrefix = new Map();
     for (const integration of integrations) {
-      ownerByPrefix.set(integration.formKey, integration);
-      if (integration.gadgetId) {
-        ownerByPrefix.set(`data.${integration.gadgetId}`, integration);
+      const fkPrefix = integration.formKey;
+      const idPrefix = integration.gadgetId ? `data.${integration.gadgetId}` : null;
+      ownerByPrefix.set(fkPrefix, integration);
+      if (idPrefix) ownerByPrefix.set(idPrefix, integration);
+      if (integration.repeaterContext?.repeaterFormKey) {
+        const rfk = integration.repeaterContext.repeaterFormKey;
+        const bareFormKey = fkPrefix.startsWith('data.') ? fkPrefix.slice(5) : fkPrefix;
+        ownerByPrefix.set(`data.${rfk}.data.*.data.${bareFormKey}`, integration);
+        if (integration.gadgetId) {
+          ownerByPrefix.set(`data.${rfk}.data.*.data.${integration.gadgetId}`, integration);
+        }
       }
       for (const out of integration.outputs) {
         out.consumers = []; // form-side and workflow-side consumers land here
@@ -138,36 +184,98 @@ export function useAppIntrospection() {
     // `data.A.<path>`; (b) conditional visibility rules; (c) default values;
     // (d) anything else that ends up as a formKey-shaped string in details.
     // Self-references (an integration's own children) are skipped.
+    //
+    // Sources scanned: top-level schema entries AND every gadget inside any
+    // Repeater (Repeater children don't appear in formContainer.schema, so
+    // chained inputs and visibility rules between siblings would otherwise
+    // be invisible).
+    const consumerSources = [];
     if (Array.isArray(schema)) {
       for (const entry of schema) {
         if (!entry?.formKey || !entry?.details) continue;
-        const refs = collectTaggedFormRefs(entry.details);
-        if (refs.length === 0) continue;
-        const seen = new Set();
-        for (const ref of refs) {
-          const match = matchOwner(ref.formKey, ownerByPrefix);
-          if (!match) continue;
-          const { owner, prefix } = match;
-          // Skip self-references — an integration gadget pointing at its own
-          // child outputs is internal plumbing, not a downstream consumer.
-          if (owner.formKey === entry.formKey) continue;
-          if (ref.formKey === entry.formKey) continue;
-          if (entry.formKey.startsWith(owner.formKey + '.')) continue;
+        consumerSources.push(entry);
+      }
+    }
+    for (const child of layout.repeaterChildGadgets) {
+      // Any of these fields can carry refs — keep the node if at least one
+      // is non-empty. Pure presentational nodes with nothing to scan are
+      // dropped here so the loop below stays cheap.
+      if (!child.details && !child.conditionalVisibility && !child.defaultValue && !child.description) continue;
+      consumerSources.push(child);
+    }
+    // Repeater integrations themselves also need scanning — their inputFields
+    // commonly chain to sibling integration outputs in the same row.
+    for (const integration of repeaterIntegrations) {
+      if (!integration.details) continue;
+      consumerSources.push({
+        formKey: integration.formKey,
+        label: integration.gadgetLabel,
+        type: integration.gadgetType,
+        details: integration.details,
+      });
+    }
 
-          const outputPath = relativePath(ref.formKey, prefix);
-          const out = owner.outputsByPath.get(outputPath) || ensureUndeclaredOutput(owner, outputPath);
-          const dedupeKey = `${entry.formKey}|${ref.evidence}`;
-          if (seen.has(`${owner.formKey}|${outputPath}|${dedupeKey}`)) continue;
-          seen.add(`${owner.formKey}|${outputPath}|${dedupeKey}`);
-          out.consumers.push({
-            side: 'form',
-            evidence: ref.evidence,
-            gadgetLabel: entry.label || '(unnamed)',
-            gadgetType: entry.type || '',
-            formKey: entry.formKey,
-          });
-          formConsumerCount++;
+    for (const entry of consumerSources) {
+      if (!entry?.formKey) continue;
+      // Scan multiple top-level fields, not just `details`. Conditional
+      // visibility, default values, and rich-text descriptions all live at
+      // the gadget root, alongside details — and any of them can hold
+      // `formKey:`-shaped values or `{{data.X.Y}}` placeholders. Walking
+      // each field with its name as the root fieldPath also gives the
+      // evidence inferer the right context (visibility / default / etc).
+      const refs = [
+        ...collectTaggedFormRefs(entry.details, ['details']),
+        ...collectTaggedFormRefs(entry.conditionalVisibility, ['conditionalVisibility']),
+        ...collectTaggedFormRefs(entry.defaultValue, ['defaultValue']),
+        ...collectTaggedFormRefs(entry.description, ['description']),
+      ];
+      if (refs.length === 0) continue;
+      const seen = new Set();
+      for (const ref of refs) {
+        const match = matchOwner(ref.formKey, ownerByPrefix);
+        if (!match) continue;
+        const { owner, prefix } = match;
+        // Skip self-references — an integration gadget pointing at its own
+        // child outputs is internal plumbing, not a downstream consumer.
+        if (owner.formKey === entry.formKey) continue;
+        if (ref.formKey === entry.formKey) continue;
+        if (entry.formKey.startsWith(owner.formKey + '.')) continue;
+
+        const outputPath = relativePath(ref.formKey, prefix);
+        // Empty path = ref to the integration gadget itself (e.g. an
+        // IsNotEmpty visibility rule on the integration's root). That
+        // signals "the integration was selected", not "output X was
+        // consumed", so it doesn't belong on the per-output list. The
+        // integration's placedOnForm flag already conveys it. Track on
+        // the integration instead so the render can surface it later
+        // if useful.
+        if (outputPath === '') {
+          if (!owner.selectionConsumers) owner.selectionConsumers = [];
+          const sKey = `${entry.formKey}|${ref.evidence}`;
+          if (!owner.selectionConsumers.some((c) => c._dedupe === sKey)) {
+            owner.selectionConsumers.push({
+              side: 'form',
+              evidence: ref.evidence,
+              gadgetLabel: entry.label || '(unnamed)',
+              gadgetType: entry.type || '',
+              formKey: entry.formKey,
+              _dedupe: sKey,
+            });
+          }
+          continue;
         }
+        const out = owner.outputsByPath.get(outputPath) || ensureUndeclaredOutput(owner, outputPath);
+        const dedupeKey = `${entry.formKey}|${ref.evidence}`;
+        if (seen.has(`${owner.formKey}|${outputPath}|${dedupeKey}`)) continue;
+        seen.add(`${owner.formKey}|${outputPath}|${dedupeKey}`);
+        out.consumers.push({
+          side: 'form',
+          evidence: ref.evidence,
+          gadgetLabel: entry.label || '(unnamed)',
+          gadgetType: entry.type || '',
+          formKey: entry.formKey,
+        });
+        formConsumerCount++;
       }
     }
 
@@ -415,9 +523,12 @@ function inferEvidence(fieldPath) {
 }
 
 // Form-side counterpart of the workflow walker's tagged collector. Walks an
-// arbitrary `details` subtree and yields every formKey-shaped reference it
-// finds, with an evidence tag derived from the field path it sat under.
-function collectTaggedFormRefs(node) {
+// arbitrary subtree (details / conditionalVisibility / etc) and yields
+// every formKey-shaped reference it finds, with an evidence tag derived
+// from the field path it sat under. The initialFieldPath seeds the
+// fieldPath so the evidence inferer can tell visibility refs from
+// default-value refs at the root of each scan.
+function collectTaggedFormRefs(node, initialFieldPath = []) {
   const out = [];
   const visit = (n, fieldPath) => {
     if (!n) return;
@@ -446,7 +557,7 @@ function collectTaggedFormRefs(node) {
       }
     }
   };
-  visit(node, []);
+  visit(node, initialFieldPath);
   return out;
 }
 
@@ -489,28 +600,45 @@ function relativePath(fullKey, prefix) {
 // gadgets. A gadget is in the template iff the user placed it on the form.
 // Auto-spawned schema entries that the user never placed do NOT appear here.
 //
-// Two outputs from the walk:
+// Outputs from the walk:
 //   - `placedIds`: the set of every gadget id encountered. Used to mark an
 //     integration's primary gadget as placed-on-form.
 //   - `dataLinks`: every DataLink gadget, the canonical "show output X from
 //     integration Y" element. Each carries `parentId` (the integration's
-//     formKey, e.g. "data.nKKmlhYUn") and `selectedOutputField.path` (the
-//     output's path, matching `outputFields[*].path` on the integration).
-//     Mapped to `{ parentFormKey, outputPath, label, dataLinkId }` so the
-//     introspect step can mark the matching output as placedOnForm.
+//     id-prefixed addressing, e.g. "data.nKKmlhYUn") and
+//     `selectedOutputField.path` (the output's path, matching
+//     `outputFields[*].path` on the integration). Mapped to
+//     `{ parentFormKey, outputPath, label, dataLinkId }` so the introspect
+//     step can mark the matching output as placedOnForm.
+//   - `repeaterIntegrations`: integration gadgets nested inside any Repeater
+//     `childrenTemplate`. These do NOT appear in `formContainer.schema` (the
+//     schema only flattens top-level entries), so the schema-walking logic
+//     would miss them entirely. We extract them from the template, give
+//     them a `repeaterContext`, and treat them as a separate group that
+//     gets placement, consumer detection, and rendering on equal footing
+//     with top-level integrations.
+//   - `repeaterChildGadgets`: every non-integration gadget inside any
+//     Repeater. We need these so the form-side consumer scan can catch
+//     refs like "this sibling in the same row points at integration X's
+//     output". Without scanning Repeater children, chained inputs and
+//     visibility rules between siblings would be invisible to the walker.
 //
 // Containers carry their children under `children` (Section/Row/Column) or
 // `childrenTemplate` (Repeater). Both are recursed.
 function walkTemplate(template) {
   const placedIds = new Set();
   const dataLinks = [];
-  const visit = (node) => {
+  const repeaterIntegrations = [];
+  const repeaterChildGadgets = [];
+
+  const visit = (node, repeaterContext) => {
     if (!node || typeof node !== 'object') return;
     if (Array.isArray(node)) {
-      for (const item of node) visit(item);
+      for (const item of node) visit(item, repeaterContext);
       return;
     }
     if (typeof node.id === 'string' && node.id) placedIds.add(node.id);
+
     if (node.type === 'DataLink' && node.details) {
       const parentFormKey = node.details.parentId;
       const sel = node.details.selectedOutputField;
@@ -520,12 +648,65 @@ function walkTemplate(template) {
           outputPath: sel.path,
           label: node.label || sel.label || '',
           dataLinkId: node.id || '',
+          repeaterContext: repeaterContext || null,
         });
       }
     }
-    if (Array.isArray(node.children)) for (const c of node.children) visit(c);
-    if (Array.isArray(node.childrenTemplate)) for (const c of node.childrenTemplate) visit(c);
+
+    // Repeater entry: stash the context so descendants know which
+    // wildcard prefix applies. Template formKeys/ids inside a Repeater
+    // don't carry the data. prefix or the repeater path — the walker
+    // applies it lazily for owner registration.
+    if (node.type === 'Repeater') {
+      const childContext = {
+        repeaterId: node.id || '',
+        repeaterFormKey: node.formKey || '',
+        repeaterLabel: node.label || '(unnamed repeater)',
+      };
+      if (Array.isArray(node.children)) for (const c of node.children) visit(c, childContext);
+      if (Array.isArray(node.childrenTemplate)) for (const c of node.childrenTemplate) visit(c, childContext);
+      return;
+    }
+
+    // Inside a Repeater: catalogue integration gadgets and any other node
+    // the form-side consumer scan will need to inspect. Non-integration
+    // nodes go to repeaterChildGadgets even if they lack a formKey
+    // (Spacers, Sections, Rows, Columns) — they often carry
+    // conditionalVisibility refs that point at integration outputs, and
+    // missing those would silently under-count consumers.
+    if (repeaterContext) {
+      if (typeof node.formKey === 'string' && node.formKey && isIntegrationGadget(node)) {
+        repeaterIntegrations.push({
+          // Mirror the schema convention: prepend "data." so owner-prefix
+          // strings line up with how matchOwner expects them.
+          formKey: `data.${node.formKey}`,
+          id: node.id || '',
+          type: node.type || '',
+          label: node.label || '',
+          details: node.details,
+          repeaterContext,
+        });
+      } else if (node.id || node.details || node.conditionalVisibility || node.description) {
+        repeaterChildGadgets.push({
+          // Synthesize a stable identity for self-reference skipping. Real
+          // gadgets keep their actual formKey; presentational gadgets get
+          // an `__id.<id>` string that won't ever match an owner prefix.
+          formKey: node.formKey ? `data.${node.formKey}` : `__id.${node.id || ''}`,
+          id: node.id || '',
+          type: node.type || '',
+          label: node.label || '',
+          details: node.details || null,
+          conditionalVisibility: node.conditionalVisibility || null,
+          defaultValue: node.defaultValue || null,
+          description: node.description || null,
+          repeaterContext,
+        });
+      }
+    }
+
+    if (Array.isArray(node.children)) for (const c of node.children) visit(c, repeaterContext);
+    if (Array.isArray(node.childrenTemplate)) for (const c of node.childrenTemplate) visit(c, repeaterContext);
   };
-  visit(template);
-  return { placedIds, dataLinks };
+  visit(template, null);
+  return { placedIds, dataLinks, repeaterIntegrations, repeaterChildGadgets };
 }

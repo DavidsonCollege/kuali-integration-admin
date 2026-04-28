@@ -87,6 +87,12 @@
                     <div class="text-sm font-medium truncate">
                       {{ integration.integrationLabel || integration.gadgetLabel || integration.integrationId }}
                     </div>
+                    <div
+                      v-if="integration.repeaterContext"
+                      class="text-[10px] text-subtle mt-0.5 truncate"
+                    >
+                      in Repeater "{{ integration.repeaterContext.repeaterLabel }}"
+                    </div>
                     <div class="text-xs text-subtle mt-0.5">
                       {{ integration.outputs.length }} output{{ integration.outputs.length === 1 ? '' : 's' }}
                       · {{ placedOutputCount(integration) }} placed
@@ -120,6 +126,14 @@
                     <span v-if="selected.placedOnForm" class="text-ink">placed on form</span>
                     <span v-else>in schema only</span>
                     · <code class="font-mono">{{ selected.formKey }}</code>
+                  </p>
+                  <p
+                    v-if="selected.repeaterContext"
+                    class="text-xs text-muted mt-1"
+                  >
+                    Inside Repeater
+                    <span class="text-ink">"{{ selected.repeaterContext.repeaterLabel }}"</span>
+                    — one instance per repeated row
                   </p>
                 </div>
                 <div class="text-xs text-subtle text-right">
@@ -158,6 +172,26 @@
                       </template>
                     </span>
                     <span v-if="input.required" class="text-[10px] uppercase tracking-wider text-subtle shrink-0">required</span>
+                  </li>
+                </ul>
+              </div>
+
+              <!-- Selection refs: places that key off "the integration was
+                   chosen" rather than a specific output. Usually visibility
+                   rules gating downstream sections. -->
+              <div v-if="selected.selectionConsumers?.length" class="mt-5">
+                <h4 class="text-xs uppercase tracking-wider text-subtle mb-2">
+                  Selection of this integration drives
+                </h4>
+                <ul class="text-sm space-y-1">
+                  <li
+                    v-for="(c, i) in selected.selectionConsumers"
+                    :key="i"
+                    class="text-muted"
+                  >
+                    Gadget <span class="font-medium text-ink">"{{ c.gadgetLabel }}"</span>
+                    <span class="text-xs text-subtle ml-1">({{ c.gadgetType }})</span>
+                    <span class="text-xs text-subtle ml-1">— via {{ c.evidence }}</span>
                   </li>
                 </ul>
               </div>
