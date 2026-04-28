@@ -14,13 +14,19 @@
 //     types seen so far: IntegrationFill, IntegrationTypeahead.
 //   - Linked-gadget spawns (the Text/Email entries auto-derived from an
 //     IntegrationFill's outputFields) have `details: null` or `details: {}`
-//     and a child formKey. They aren't a separate integration use, but
-//     they ARE the form-side consumers of an output — we keep them in a
-//     gadget index so the output map can name them.
+//     and a child formKey. **Critical correction (2026-04-28):** every
+//     declared output spawns a child gadget regardless of whether the user
+//     ever placed that field on the form layout. So the presence of a
+//     child gadget is NOT evidence the output is displayed — it's just
+//     metadata. Whether a child is actually rendered to the user requires
+//     the form's layout structure, which we don't currently fetch (see
+//     TODO at the bottom). We track auto-spawned children separately as
+//     informational metadata, distinct from real consumers.
 //   - `details.inputFields` is keyed by integration param name. Each entry
 //     is `{ required, type, value }` where `type` is "form" (value points
 //     at another formKey via `value: { id, type }`) or "static" (value is
-//     the raw string).
+//     the raw string). When integration B's inputFields point at
+//     `data.A.<path>`, that IS a real consumer of A's output.
 //   - `details.outputFields` is an array of `{ label, path, type }` —
 //     the contract for what flows back into the form.
 //
@@ -59,23 +65,60 @@ export function useAppIntrospection() {
     let formConsumerCount = 0;
     let workflowConsumerCount = 0;
 
-    // Form-side consumers: any non-integration gadget whose formKey lives
-    // under an integration's owner prefix is a child consumer of that
-    // integration's output. The auto-spawned Text/Email gadgets land here.
+    // Auto-spawned children — informational only. Every declared output
+    // spawns a child gadget; this does NOT prove placement on the form
+    // layout. Tracked per-output so the render layer can show "auto-spawned
+    // as field X" alongside the real consumer list, with honest framing.
     for (const gadget of gadgetIndex.list) {
       if (gadget.isIntegrationGadget) continue;
       const owner = matchOwner(gadget.formKey, ownerByPrefix);
       if (!owner) continue;
       const outputPath = relativePath(gadget.formKey, owner.formKey);
       const out = owner.outputsByPath.get(outputPath) || ensureUndeclaredOutput(owner, outputPath);
-      out.consumers.push({
-        side: 'form',
-        evidence: 'spawned-gadget',
-        gadgetLabel: gadget.label || '(unnamed)',
-        gadgetType: gadget.type,
+      out.autoSpawned = {
+        gadgetLabel: gadget.label || '',
+        gadgetType: gadget.type || '',
         formKey: gadget.formKey,
-      });
-      formConsumerCount++;
+      };
+    }
+
+    // Form-side consumers: walk every gadget in the schema and collect every
+    // formKey-shaped reference inside its `details`. Any reference that
+    // resolves under another integration's owner prefix is a real consumer.
+    // Covers (a) chained inputs — integration B's inputFields point at
+    // `data.A.<path>`; (b) conditional visibility rules; (c) default values;
+    // (d) anything else that ends up as a formKey-shaped string in details.
+    // Self-references (an integration's own children) are skipped.
+    if (Array.isArray(schema)) {
+      for (const entry of schema) {
+        if (!entry?.formKey || !entry?.details) continue;
+        const refs = collectTaggedFormRefs(entry.details);
+        if (refs.length === 0) continue;
+        const seen = new Set();
+        for (const ref of refs) {
+          const owner = matchOwner(ref.formKey, ownerByPrefix);
+          if (!owner) continue;
+          // Skip self-references — an integration gadget pointing at its own
+          // child outputs is internal plumbing, not a downstream consumer.
+          if (owner.formKey === entry.formKey) continue;
+          if (ref.formKey === entry.formKey) continue;
+          if (entry.formKey.startsWith(owner.formKey + '.')) continue;
+
+          const outputPath = relativePath(ref.formKey, owner.formKey);
+          const out = owner.outputsByPath.get(outputPath) || ensureUndeclaredOutput(owner, outputPath);
+          const dedupeKey = `${entry.formKey}|${ref.evidence}`;
+          if (seen.has(`${owner.formKey}|${outputPath}|${dedupeKey}`)) continue;
+          seen.add(`${owner.formKey}|${outputPath}|${dedupeKey}`);
+          out.consumers.push({
+            side: 'form',
+            evidence: ref.evidence,
+            gadgetLabel: entry.label || '(unnamed)',
+            gadgetType: entry.type || '',
+            formKey: entry.formKey,
+          });
+          formConsumerCount++;
+        }
+      }
     }
 
     // Workflow-side consumers: walk every step and tag each formKey-shaped
@@ -308,6 +351,54 @@ function inferEvidence(fieldPath) {
   return 'config';
 }
 
+// Form-side counterpart of the workflow walker's tagged collector. Walks an
+// arbitrary `details` subtree and yields every formKey-shaped reference it
+// finds, with an evidence tag derived from the field path it sat under.
+function collectTaggedFormRefs(node) {
+  const out = [];
+  const visit = (n, fieldPath) => {
+    if (!n) return;
+    if (typeof n === 'string') {
+      // Strings can carry `{{data.X.Y}}` template placeholders too — same
+      // convention the workflow side uses. Tag with the surrounding field
+      // path (rule/visibility/etc) so the render layer can explain why.
+      const evidence = inferFormEvidence(fieldPath);
+      for (const m of n.matchAll(TEMPLATE_FORMKEY_RE)) {
+        out.push({ formKey: m[1], evidence, fieldPath });
+      }
+      return;
+    }
+    if (Array.isArray(n)) {
+      n.forEach((item, idx) => visit(item, [...fieldPath, String(idx)]));
+      return;
+    }
+    if (typeof n !== 'object') return;
+    for (const [k, v] of Object.entries(n)) {
+      // `formKey` and the `id` inside an `inputFields[*].value` block both
+      // hold formKey-shaped strings.
+      if ((k === 'formKey' || k === 'id') && typeof v === 'string' && v.startsWith('data.')) {
+        out.push({ formKey: v, evidence: inferFormEvidence([...fieldPath, k]), fieldPath: [...fieldPath, k] });
+      } else {
+        visit(v, [...fieldPath, k]);
+      }
+    }
+  };
+  visit(node, []);
+  return out;
+}
+
+function inferFormEvidence(fieldPath) {
+  const joined = fieldPath.join('.').toLowerCase();
+  // The most common case: another integration's inputFields pointing at
+  // this output. Worth its own evidence tag because it's the strongest
+  // possible signal that the output is being chained downstream.
+  if (joined.includes('inputfields')) return 'integration-input';
+  if (joined.includes('visible') || joined.includes('conditional') || joined.includes('rule') || joined.includes('condition')) return 'visibility';
+  if (joined.includes('default')) return 'default';
+  if (joined.includes('column') || joined.includes('source') || joined.includes('options')) return 'data-source';
+  return 'config';
+}
+
 // ---------- Helpers ----------
 
 function matchOwner(formKey, ownerByPrefix) {
@@ -322,3 +413,16 @@ function relativePath(fullKey, prefix) {
   if (fullKey.startsWith(prefix + '.')) return fullKey.slice(prefix.length + 1);
   return fullKey;
 }
+
+// TODO: detect "actually placed on form layout".
+// `formContainer.schema` lists every gadget — including auto-spawned outputs
+// the user never placed on the form. The layout structure (which page /
+// section / column each gadget sits in) lives elsewhere on `FormContainer`.
+// To answer "is this output displayed?" we'd need to add the layout field
+// to the `getApp` query, build a Set of gadget ids/formKeys that appear in
+// the layout, and check each auto-spawned child against that set.
+//
+// Next step: live-introspect FormContainer to find the layout field name.
+// Likely candidates: `pages`, `layout`, `sections`, `formLayout`. Once we
+// know the field, augment `getApp` and surface a `displayed: boolean` on
+// each `autoSpawned` entry.

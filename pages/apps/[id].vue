@@ -184,6 +184,7 @@
                         {{ output.consumers.length }} consumer{{ output.consumers.length === 1 ? '' : 's' }}
                       </div>
                     </div>
+
                     <ul v-if="output.consumers.length" class="mt-2 space-y-1 text-sm">
                       <li
                         v-for="(consumer, i) in output.consumers"
@@ -195,8 +196,9 @@
                         </span>
                         <span>
                           <template v-if="consumer.side === 'form'">
-                            Field <span class="font-medium text-ink">"{{ consumer.gadgetLabel }}"</span>
+                            Gadget <span class="font-medium text-ink">"{{ consumer.gadgetLabel }}"</span>
                             <span class="text-xs text-subtle ml-1">({{ consumer.gadgetType }})</span>
+                            <span class="text-xs text-subtle ml-1">— via {{ consumer.evidence }}</span>
                           </template>
                           <template v-else>
                             <span class="font-medium text-ink">{{ consumer.stepType }}</span>
@@ -209,8 +211,15 @@
                         </span>
                       </li>
                     </ul>
-                    <p v-else class="mt-1 text-xs text-muted italic">
-                      Defined but not read by any form gadget or workflow step.
+
+                    <p v-else-if="output.declared && !output.autoSpawned" class="mt-1 text-xs text-muted italic">
+                      Declared but never referenced — no chained input, visibility rule, or workflow step reads this output.
+                    </p>
+
+                    <p v-if="output.autoSpawned" class="mt-1 text-xs text-subtle italic">
+                      Auto-spawned in schema as <span class="text-ink not-italic">"{{ output.autoSpawned.gadgetLabel }}"</span>
+                      <span class="text-subtle">({{ output.autoSpawned.gadgetType }})</span>.
+                      Whether this gadget is placed on the form layout isn't yet detectable from the data we fetch.
                     </p>
                   </li>
                 </ul>
